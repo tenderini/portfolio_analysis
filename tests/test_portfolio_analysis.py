@@ -3,12 +3,14 @@ import unittest
 import pandas as pd
 
 from portfolio_analysis import (
+    _build_continent_exposure,
     _build_overlap_table,
     _build_etf_composition,
     _is_cash_equivalent_mask,
     _build_single_etf_dimension_exposure,
     build_report,
     format_snapshot_date,
+    get_dimension_drilldown,
 )
 
 
@@ -100,6 +102,63 @@ class BuildEtfCompositionTests(unittest.TestCase):
         self.assertIn("developed markets", report["etf_descriptions"][0]["description"].lower())
         self.assertIn("emerging markets", report["etf_descriptions"][1]["description"].lower())
         self.assertIn("small-cap", report["etf_descriptions"][2]["description"].lower())
+
+    def test_build_report_exposes_continent_exposure_from_country_labels(self) -> None:
+        report = build_report(snapshot_date="20260408")
+
+        self.assertIn("continent_exposure", report)
+        continents = set(report["continent_exposure"]["continent"].tolist())
+        self.assertIn("North America", continents)
+        self.assertIn("Europe", continents)
+        self.assertIn("Asia", continents)
+        self.assertIn("Australia", continents)
+        self.assertIn("South America", continents)
+        self.assertIn("Africa", continents)
+
+    def test_build_continent_exposure_maps_special_country_labels(self) -> None:
+        country_exposure = pd.DataFrame(
+            {
+                "country": ["United States", "Canada", "Brazil", "Japan", "European Union", "Egypt"],
+                "contribution_pct": [10.0, 5.0, 4.0, 3.0, 2.0, 1.0],
+            }
+        )
+
+        exposure = _build_continent_exposure(country_exposure)
+
+        self.assertEqual(
+            exposure.to_dict("records"),
+            [
+                {"continent": "North America", "contribution_pct": 15.0},
+                {"continent": "South America", "contribution_pct": 4.0},
+                {"continent": "Asia", "contribution_pct": 3.0},
+                {"continent": "Europe", "contribution_pct": 2.0},
+                {"continent": "Africa", "contribution_pct": 1.0},
+            ],
+        )
+
+    def test_build_report_exposes_continent_drilldown_inputs(self) -> None:
+        report = build_report(snapshot_date="20260408")
+
+        self.assertIn("continent_etf_breakdown", report)
+        self.assertIn("continent_company_drivers", report)
+        self.assertIn("continent", report["continent_etf_breakdown"].columns)
+        self.assertIn("continent", report["continent_company_drivers"].columns)
+
+    def test_get_dimension_drilldown_returns_expected_rows_for_continent(self) -> None:
+        report = build_report(snapshot_date="20260408")
+
+        continent = report["continent_exposure"].iloc[0]["continent"]
+        drilldown = get_dimension_drilldown(
+            report["continent_etf_breakdown"],
+            report["continent_company_drivers"],
+            "continent",
+            continent,
+        )
+
+        self.assertFalse(drilldown["etf_breakdown"].empty)
+        self.assertFalse(drilldown["top_companies"].empty)
+        self.assertTrue((drilldown["etf_breakdown"]["continent"] == continent).all())
+        self.assertTrue((drilldown["top_companies"]["continent"] == continent).all())
 
 
 class CashEquivalentClassificationTests(unittest.TestCase):

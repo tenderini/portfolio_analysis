@@ -36,6 +36,56 @@ ETF_DESCRIPTION_MAP = {
         "role": "Fills the developed-world small-cap gap left by SWDA.",
     },
 }
+COUNTRY_TO_CONTINENT = {
+    "Australia": "Australia",
+    "Austria": "Europe",
+    "Belgium": "Europe",
+    "Brazil": "South America",
+    "Canada": "North America",
+    "Chile": "South America",
+    "China": "Asia",
+    "Colombia": "South America",
+    "Czech Republic": "Europe",
+    "Denmark": "Europe",
+    "Egypt": "Africa",
+    "European Union": "Europe",
+    "Finland": "Europe",
+    "France": "Europe",
+    "Germany": "Europe",
+    "Greece": "Europe",
+    "Hong Kong": "Asia",
+    "Hungary": "Europe",
+    "India": "Asia",
+    "Indonesia": "Asia",
+    "Ireland": "Europe",
+    "Israel": "Asia",
+    "Italy": "Europe",
+    "Japan": "Asia",
+    "Korea (South)": "Asia",
+    "Kuwait": "Asia",
+    "Malaysia": "Asia",
+    "Mexico": "North America",
+    "Netherlands": "Europe",
+    "New Zealand": "Australia",
+    "Norway": "Europe",
+    "Peru": "South America",
+    "Philippines": "Asia",
+    "Poland": "Europe",
+    "Portugal": "Europe",
+    "Qatar": "Asia",
+    "Saudi Arabia": "Asia",
+    "Singapore": "Asia",
+    "South Africa": "Africa",
+    "Spain": "Europe",
+    "Sweden": "Europe",
+    "Switzerland": "Europe",
+    "Taiwan": "Asia",
+    "Thailand": "Asia",
+    "Turkey": "Asia",
+    "United Arab Emirates": "Asia",
+    "United Kingdom": "Europe",
+    "United States": "North America",
+}
 REQUIRED_SNAPSHOT_FILES = {
     "company_exposure": "PIE_company_exposure_{date}.csv",
     "country_exposure": "PIE_country_exposure_{date}.csv",
@@ -134,6 +184,9 @@ def build_report(snapshot_date: str | None = None, data_dir: Path | str = DATA_D
         "country",
         fallback=snapshot_inputs["source_country_exposure"],
     )
+    continent_holdings = _add_continent_column(combined_holdings)
+    continent_company_holdings = _add_continent_column(company_view_holdings)
+    continent_exposure = _build_dimension_exposure(continent_holdings, "continent")
     sector_exposure = _build_dimension_exposure(
         combined_holdings,
         "sector",
@@ -142,8 +195,10 @@ def build_report(snapshot_date: str | None = None, data_dir: Path | str = DATA_D
 
     company_etf_breakdown = _build_etf_breakdown(company_view_holdings, "company")
     country_etf_breakdown = _build_etf_breakdown(combined_holdings, "country")
+    continent_etf_breakdown = _build_etf_breakdown(continent_holdings, "continent")
     sector_etf_breakdown = _build_etf_breakdown(combined_holdings, "sector")
     country_company_drivers = _build_company_drivers(company_view_holdings, "country")
+    continent_company_drivers = _build_company_drivers(continent_company_holdings, "continent")
     sector_company_drivers = _build_company_drivers(company_view_holdings, "sector")
     overlap_table = _build_overlap_table(combined_holdings)
     concentration_metrics = _build_concentration_metrics(
@@ -164,11 +219,14 @@ def build_report(snapshot_date: str | None = None, data_dir: Path | str = DATA_D
         "single_etf_analysis": single_etf_analysis,
         "company_exposure": company_exposure,
         "country_exposure": country_exposure,
+        "continent_exposure": continent_exposure,
         "sector_exposure": sector_exposure,
         "company_etf_breakdown": company_etf_breakdown,
         "country_etf_breakdown": country_etf_breakdown,
+        "continent_etf_breakdown": continent_etf_breakdown,
         "sector_etf_breakdown": sector_etf_breakdown,
         "country_company_drivers": country_company_drivers,
+        "continent_company_drivers": continent_company_drivers,
         "sector_company_drivers": sector_company_drivers,
         "overlap_table": overlap_table,
         "concentration_metrics": concentration_metrics,
@@ -329,6 +387,30 @@ def _build_etf_breakdown(combined_holdings: pd.DataFrame, dimension: str) -> pd.
         .reset_index(drop=True)
     )
     return breakdown
+
+
+def _build_continent_exposure(country_exposure: pd.DataFrame) -> pd.DataFrame:
+    if country_exposure.empty:
+        return pd.DataFrame(columns=["continent", "contribution_pct"])
+
+    continent_view = country_exposure.copy()
+    continent_view["continent"] = continent_view["country"].map(COUNTRY_TO_CONTINENT).fillna("Other")
+    return (
+        continent_view.groupby("continent", as_index=False)["contribution_pct"]
+        .sum()
+        .sort_values(["contribution_pct", "continent"], ascending=[False, True])
+        .reset_index(drop=True)
+    )
+
+
+def _add_continent_column(df: pd.DataFrame, country_column: str = "country") -> pd.DataFrame:
+    result = df.copy()
+    if result.empty:
+        result["continent"] = pd.Series(dtype="object")
+        return result
+
+    result["continent"] = result[country_column].map(COUNTRY_TO_CONTINENT).fillna("Other")
+    return result
 
 
 def _build_single_etf_dimension_exposure(

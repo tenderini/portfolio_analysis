@@ -257,18 +257,9 @@ if not available_dates:
     st.error("No complete PIE snapshots were found in ./data.")
     st.stop()
 
-with st.sidebar:
-    st.header("Controls")
-    snapshot_date = st.selectbox(
-        "Snapshot date",
-        options=available_dates,
-        index=0,
-        format_func=format_snapshot_date,
-    )
-    top_n = st.select_slider("Top N", options=[10, 20, 50], value=20)
-    company_search = st.text_input("Search companies", placeholder="NVIDIA, Microsoft...")
-    if st.button("Refresh analysis", use_container_width=True):
-        load_report.clear()
+snapshot_date = available_dates[0]
+top_n = 20
+company_search = ""
 
 report = load_report(snapshot_date)
 display_snapshot_date = format_snapshot_date(report["snapshot_date"])
@@ -289,8 +280,8 @@ metric_columns = st.columns(len(headline_metrics))
 for column, metric in zip(metric_columns, headline_metrics):
     column.metric(metric["label"], metric["value"])
 
-overview_tab, companies_tab, countries_tab, sectors_tab, overlap_tab, single_etf_tab = st.tabs(
-    ["Overview", "Companies", "Countries", "Sectors", "Overlap", "Single ETF Analysis"]
+overview_tab, companies_tab, geography_tab, sectors_tab, overlap_tab, single_etf_tab = st.tabs(
+    ["Overview", "Companies", "Countries/Continents", "Sectors", "Overlap", "Single ETF Analysis"]
 )
 
 with overview_tab:
@@ -361,28 +352,57 @@ with companies_tab:
         company_drilldown = get_company_drilldown(report["company_etf_breakdown"], selected_company)
         render_breakdown_table(company_drilldown, "company", height=340)
 
-with countries_tab:
-    st.subheader("Country exposure")
-    country_cols = st.columns([1.35, 1])
-    with country_cols[0]:
-        render_bar_chart(report["country_exposure"], "country", f"Top {top_n} countries", top_n)
-    with country_cols[1]:
-        render_exposure_table(report["country_exposure"], "country", height=460)
+with geography_tab:
+    countries_tab, continents_tab = st.tabs(["Countries", "Continents"])
 
-    selected_country = st.selectbox("Country drilldown", options=report["country_exposure"]["country"].tolist())
-    country_drilldown = get_dimension_drilldown(
-        report["country_etf_breakdown"],
-        report["country_company_drivers"],
-        "country",
-        selected_country,
-    )
-    drilldown_cols = st.columns(2)
-    with drilldown_cols[0]:
-        st.caption("Contribution by ETF")
-        render_breakdown_table(country_drilldown["etf_breakdown"], "country", height=280)
-    with drilldown_cols[1]:
-        st.caption("Top companies driving this country")
-        render_exposure_table(country_drilldown["top_companies"].head(top_n), "company", height=280)
+    with countries_tab:
+        st.subheader("Country exposure")
+        country_cols = st.columns([1.35, 1])
+        with country_cols[0]:
+            render_bar_chart(report["country_exposure"], "country", f"Top {top_n} countries", top_n)
+        with country_cols[1]:
+            render_exposure_table(report["country_exposure"], "country", height=460)
+
+        selected_country = st.selectbox("Country drilldown", options=report["country_exposure"]["country"].tolist())
+        country_drilldown = get_dimension_drilldown(
+            report["country_etf_breakdown"],
+            report["country_company_drivers"],
+            "country",
+            selected_country,
+        )
+        drilldown_cols = st.columns(2)
+        with drilldown_cols[0]:
+            st.caption("Contribution by ETF")
+            render_breakdown_table(country_drilldown["etf_breakdown"], "country", height=280)
+        with drilldown_cols[1]:
+            st.caption("Top companies driving this country")
+            render_exposure_table(country_drilldown["top_companies"].head(top_n), "company", height=280)
+
+    with continents_tab:
+        st.subheader("Continent exposure")
+        continent_cols = st.columns([1.35, 1])
+        with continent_cols[0]:
+            render_bar_chart(report["continent_exposure"], "continent", f"Top {top_n} continents", top_n)
+        with continent_cols[1]:
+            render_exposure_table(report["continent_exposure"], "continent", height=460)
+
+        selected_continent = st.selectbox(
+            "Continent drilldown",
+            options=report["continent_exposure"]["continent"].tolist(),
+        )
+        continent_drilldown = get_dimension_drilldown(
+            report["continent_etf_breakdown"],
+            report["continent_company_drivers"],
+            "continent",
+            selected_continent,
+        )
+        drilldown_cols = st.columns(2)
+        with drilldown_cols[0]:
+            st.caption("Contribution by ETF")
+            render_breakdown_table(continent_drilldown["etf_breakdown"], "continent", height=280)
+        with drilldown_cols[1]:
+            st.caption("Top companies driving this continent")
+            render_exposure_table(continent_drilldown["top_companies"].head(top_n), "company", height=280)
 
 with sectors_tab:
     st.subheader("Sector exposure")
