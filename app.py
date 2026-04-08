@@ -3,6 +3,14 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
+from app_theme import (
+    BAR_COLOR_SCALE,
+    DARK_ETF_COLOR_MAP,
+    TEXT_PRIMARY,
+    apply_dark_figure_layout,
+    build_bar_value_axis_range,
+    build_theme_css,
+)
 from portfolio_analysis import (
     build_report,
     filter_company_exposure,
@@ -23,44 +31,7 @@ st.set_page_config(
     layout="wide",
 )
 
-st.markdown(
-    """
-    <style>
-      :root {
-        --accent: #0f4c81;
-        --accent-soft: #dce8f5;
-        --panel: #f7f4ee;
-      }
-      .block-container {
-        padding-top: 1.5rem;
-        padding-bottom: 2rem;
-      }
-      .dashboard-banner {
-        background: linear-gradient(135deg, #f7f4ee 0%, #edf4fb 65%, #dce8f5 100%);
-        border: 1px solid rgba(15, 76, 129, 0.12);
-        border-radius: 18px;
-        padding: 1.25rem 1.5rem;
-        margin-bottom: 1rem;
-      }
-      .dashboard-banner h1 {
-        color: #13283d;
-        font-size: 2rem;
-        margin: 0;
-      }
-      .dashboard-banner p {
-        color: #34506a;
-        margin: 0.45rem 0 0 0;
-      }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-ETF_COLOR_MAP = {
-    "SWDA": "#0f4c81",
-    "EMIM": "#6a9ac4",
-    "WSML": "#d89a3d",
-}
+st.markdown(build_theme_css(), unsafe_allow_html=True)
 
 
 @st.cache_data(show_spinner=False)
@@ -86,16 +57,25 @@ def render_bar_chart(data: pd.DataFrame, label_column: str, title: str, top_n: i
         orientation="h",
         text="contribution_pct",
         color="contribution_pct",
-        color_continuous_scale=["#dce8f5", "#0f4c81"],
+        color_continuous_scale=BAR_COLOR_SCALE,
         title=title,
     )
-    fig.update_traces(texttemplate="%{text:.2f}%", textposition="outside")
+    fig.update_traces(texttemplate="%{text:.2f}%", textposition="outside", cliponaxis=False)
+    apply_dark_figure_layout(
+        fig,
+        title,
+        max(420, top_n * 28),
+    )
     fig.update_layout(
         coloraxis_showscale=False,
-        height=max(420, top_n * 28),
-        margin=dict(l=0, r=12, t=42, b=12),
         xaxis_title="Portfolio contribution (%)",
         yaxis_title="",
+        xaxis=dict(
+            range=build_bar_value_axis_range(chart_data["contribution_pct"]),
+            gridcolor="rgba(138, 160, 181, 0.18)",
+            zeroline=False,
+        ),
+        hoverlabel=dict(bgcolor="#0b131c", font_color=TEXT_PRIMARY, bordercolor="rgba(78, 205, 196, 0.28)"),
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -116,7 +96,7 @@ def render_pie_chart(data: pd.DataFrame, names_column: str, values_column: str, 
         title=title,
         hole=0.35,
         color=names_column,
-        color_discrete_map=ETF_COLOR_MAP,
+        color_discrete_map=DARK_ETF_COLOR_MAP,
     )
     fig.update_traces(
         textposition="inside",
@@ -124,10 +104,14 @@ def render_pie_chart(data: pd.DataFrame, names_column: str, values_column: str, 
         hovertemplate="%{label}: %{value:.2f}%<extra></extra>",
         sort=False,
     )
+    apply_dark_figure_layout(fig, title, 360)
     fig.update_layout(
         showlegend=True,
-        height=360,
-        margin=dict(l=0, r=0, t=36 if title else 12, b=12),
+        margin=dict(l=0, r=0, t=56 if title else 12, b=12),
+        legend=dict(
+            bgcolor="rgba(0, 0, 0, 0)",
+            font=dict(color=TEXT_PRIMARY),
+        ),
     )
     st.plotly_chart(fig, use_container_width=True)
 
