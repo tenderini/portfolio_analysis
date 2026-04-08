@@ -43,6 +43,7 @@ class FakeStreamlit(types.ModuleType):
         self.page_config_calls: list[dict] = []
         self.markdown_calls: list[str] = []
         self.dataframe_calls: list[dict] = []
+        self.plotly_chart_calls: list[dict] = []
         self.bar_titles: list[str | None] = []
         self.bar_figures: list["FakeFigure"] = []
         self.column_config = FakeColumnConfig()
@@ -98,6 +99,7 @@ class FakeStreamlit(types.ModuleType):
         return None
 
     def plotly_chart(self, *args, **kwargs):
+        self.plotly_chart_calls.append({"args": args, "kwargs": kwargs})
         return None
 
     def columns(self, count_or_widths):
@@ -526,5 +528,16 @@ class AppLayoutTests(unittest.TestCase):
                 figure.updated_layout.get("xaxis_title") == "Portfolio weight (%)"
                 for figure in fake_streamlit.bar_figures
                 if "xaxis_title" in figure.updated_layout
+            )
+        )
+
+    def test_plotly_charts_are_rendered_as_static(self) -> None:
+        fake_streamlit = self.load_app()
+
+        self.assertTrue(fake_streamlit.plotly_chart_calls)
+        self.assertTrue(
+            all(
+                call["kwargs"].get("config") == {"staticPlot": True, "displayModeBar": False}
+                for call in fake_streamlit.plotly_chart_calls
             )
         )
