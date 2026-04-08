@@ -11,6 +11,7 @@ from app_theme import (
     build_bar_value_axis_range,
     build_theme_css,
 )
+from dashboard_metrics import build_summary_metrics
 from portfolio_analysis import (
     build_report,
     filter_company_exposure,
@@ -258,13 +259,10 @@ st.markdown(
 )
 
 summary = report["summary"]
-metrics = st.columns(6)
-metrics[0].metric("Holdings rows", f'{summary["total_holdings_count"]:,}')
-metrics[1].metric("Companies", f'{summary["unique_companies"]:,}')
-metrics[2].metric("Countries", f'{summary["unique_countries"]:,}')
-metrics[3].metric("Sectors", f'{summary["unique_sectors"]:,}')
-metrics[4].metric("Portfolio total", f'{summary["portfolio_total_pct"]:.2f}%')
-metrics[5].metric("Cash-equivalent rows", f'{summary["cash_equivalent_rows"]:,}')
+headline_metrics = build_summary_metrics(summary)
+metric_columns = st.columns(len(headline_metrics))
+for column, metric in zip(metric_columns, headline_metrics):
+    column.metric(metric["label"], metric["value"])
 
 overview_tab, companies_tab, countries_tab, sectors_tab, overlap_tab, single_etf_tab = st.tabs(
     ["Overview", "Companies", "Countries", "Sectors", "Overlap", "Single ETF Analysis"]
