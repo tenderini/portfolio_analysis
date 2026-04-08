@@ -5,6 +5,7 @@ from html import escape
 import pandas as pd
 import streamlit as st
 
+from app_config import load_app_config
 from app_theme import (
     BAR_COLOR_SCALE,
     DARK_ETF_COLOR_MAP,
@@ -28,9 +29,10 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     px = None
 
+APP_CONFIG = load_app_config()
 
 st.set_page_config(
-    page_title="PIE Portfolio Analysis",
+    page_title=APP_CONFIG.content.page_title,
     layout="wide",
 )
 
@@ -258,7 +260,7 @@ if not available_dates:
     st.stop()
 
 snapshot_date = available_dates[0]
-top_n = 20
+top_n = APP_CONFIG.ui.top_n
 company_search = ""
 
 report = load_report(snapshot_date)
@@ -267,8 +269,8 @@ display_snapshot_date = format_snapshot_date(report["snapshot_date"])
 st.markdown(
     f"""
     <div class="dashboard-banner">
-      <h1>PIE Portfolio Look-Through Dashboard</h1>
-      <p>Snapshot <strong>{display_snapshot_date}</strong> with drilldowns across companies, countries, sectors, and cross-ETF overlap.</p>
+      <h1>{APP_CONFIG.content.dashboard_title}</h1>
+      <p>{APP_CONFIG.content.snapshot_description_template.format(snapshot_date=display_snapshot_date)}</p>
     </div>
     """,
     unsafe_allow_html=True,
@@ -276,6 +278,10 @@ st.markdown(
 
 summary = report["summary"]
 headline_metrics = build_summary_metrics(summary)
+if not APP_CONFIG.ui.show_portfolio_total_in_overview:
+    headline_metrics = [
+        metric for metric in headline_metrics if metric["label"] != "Portfolio total"
+    ]
 metric_columns = st.columns(len(headline_metrics))
 for column, metric in zip(metric_columns, headline_metrics):
     column.metric(metric["label"], metric["value"])

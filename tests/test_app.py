@@ -8,6 +8,9 @@ import pandas as pd
 
 
 class DummyContext:
+    def __init__(self, parent=None):
+        self.parent = parent
+
     def __enter__(self):
         return self
 
@@ -15,6 +18,8 @@ class DummyContext:
         return False
 
     def metric(self, *args, **kwargs):
+        if self.parent is not None and args:
+            self.parent.metric_calls.append(args)
         return None
 
 
@@ -34,6 +39,9 @@ class FakeStreamlit(types.ModuleType):
         self.sidebar_enter_count = 0
         self.control_labels: list[str] = []
         self.tab_labels: list[list[str]] = []
+        self.metric_calls: list[tuple] = []
+        self.page_config_calls: list[dict] = []
+        self.markdown_calls: list[str] = []
         self.column_config = FakeColumnConfig()
         self.sidebar = self._Sidebar(self)
 
@@ -53,9 +61,12 @@ class FakeStreamlit(types.ModuleType):
         return decorator
 
     def set_page_config(self, **kwargs):
+        self.page_config_calls.append(kwargs)
         return None
 
     def markdown(self, *args, **kwargs):
+        if args:
+            self.markdown_calls.append(args[0])
         return None
 
     def info(self, *args, **kwargs):
@@ -87,7 +98,7 @@ class FakeStreamlit(types.ModuleType):
 
     def columns(self, count_or_widths):
         count = count_or_widths if isinstance(count_or_widths, int) else len(count_or_widths)
-        return [DummyContext() for _ in range(count)]
+        return [DummyContext(self) for _ in range(count)]
 
     def tabs(self, labels):
         self.tab_labels.append(list(labels))
@@ -230,7 +241,12 @@ def build_fake_report() -> dict:
 
 
 class AppLayoutTests(unittest.TestCase):
-    def test_app_uses_fixed_defaults_without_sidebar_controls(self) -> None:
+    def load_app(
+        self,
+        *,
+        fake_metrics=None,
+        fake_config=None,
+    ) -> FakeStreamlit:
         fake_streamlit = FakeStreamlit()
         fake_theme = types.SimpleNamespace(
             BAR_COLOR_SCALE=[],
@@ -240,8 +256,21 @@ class AppLayoutTests(unittest.TestCase):
             build_bar_value_axis_range=lambda values: [0.0, 1.0],
             build_theme_css=lambda: "<style></style>",
         )
-        fake_metrics = types.SimpleNamespace(
+        fake_metrics = fake_metrics or types.SimpleNamespace(
             build_summary_metrics=lambda summary: [{"label": "Companies", "value": "2"}]
+        )
+        fake_config = fake_config or types.SimpleNamespace(
+            load_app_config=lambda: types.SimpleNamespace(
+                ui=types.SimpleNamespace(show_portfolio_total_in_overview=False, top_n=20),
+                content=types.SimpleNamespace(
+                    page_title="PIE Portfolio Analysis",
+                    dashboard_title="PIE Portfolio Look-Through Dashboard",
+                    snapshot_description_template=(
+                        "Snapshot <strong>{snapshot_date}</strong> with drilldowns across companies, "
+                        "countries, sectors, and cross-ETF overlap."
+                    ),
+                ),
+            )
         )
         fake_portfolio = types.SimpleNamespace(
             build_report=lambda snapshot_date=None: build_fake_report(),
@@ -263,6 +292,7 @@ class AppLayoutTests(unittest.TestCase):
             name: sys.modules.get(name)
             for name in [
                 "streamlit",
+                "app_config",
                 "app_theme",
                 "dashboard_metrics",
                 "portfolio_analysis",
@@ -271,6 +301,7 @@ class AppLayoutTests(unittest.TestCase):
             ]
         }
         sys.modules["streamlit"] = fake_streamlit
+        sys.modules["app_config"] = fake_config
         sys.modules["app_theme"] = fake_theme
         sys.modules["dashboard_metrics"] = fake_metrics
         sys.modules["portfolio_analysis"] = fake_portfolio
@@ -289,6 +320,11 @@ class AppLayoutTests(unittest.TestCase):
                 else:
                     sys.modules[name] = previous_module
 
+        return fake_streamlit
+
+    def test_app_uses_fixed_defaults_without_sidebar_controls(self) -> None:
+        fake_streamlit = self.load_app()
+
         self.assertEqual(fake_streamlit.sidebar_enter_count, 0)
         self.assertNotIn("Top N", fake_streamlit.control_labels)
         self.assertNotIn("Search companies", fake_streamlit.control_labels)
@@ -298,3 +334,56 @@ class AppLayoutTests(unittest.TestCase):
             fake_streamlit.tab_labels,
         )
         self.assertIn(["Countries", "Continents"], fake_streamlit.tab_labels)
+
+    def test_app_hides_portfolio_total_metric_by_default(self) -> None:
+        fake_metrics = types.SimpleNamespace(
+            build_summary_metrics=lambda summary: [
+                {"label": "Companies", "value": "2"},
+                {"label": "Portfolio total", "value": "99.92%"},
+            ]
+        )
+
+        fake_streamlit = self.load_app(fake_metrics=fake_metrics)
+
+        self.assertIn(("Companies", "2"), fake_streamlit.metric_calls)
+        self.assertNotIn(("Portfolio total", "99.92%"), fake_streamlit.metric_calls)
+
+    def test_app_can_show_portfolio_total_metric_from_config(self) -> None:
+        fake_metrics = types.SimpleNamespace(
+            build_summary_metrics=lambda summary: [
+                {"label": "Companies", "value": "2"},
+                {"label": "Portfolio total", "value": "99.92%"},
+            ]
+        )
+        fake_config = types.SimpleNamespace(
+            load_app_config=lambda: types.SimpleNamespace(
+                ui=types.SimpleNamespace(show_portfolio_total_in_overview=True, top_n=20),
+                content=types.SimpleNamespace(
+                    page_title="PIE Portfolio Analysis",
+                    dashboard_title="PIE Portfolio Look-Through Dashboard",
+                    snapshot_description_template="Snapshot <strong>{snapshot_date}</strong>",
+                ),
+            )
+        )
+
+        fake_streamlit = self.load_app(fake_metrics=fake_metrics, fake_config=fake_config)
+
+        self.assertIn(("Portfolio total", "99.92%"), fake_streamlit.metric_calls)
+
+    def test_app_uses_configured_content_defaults(self) -> None:
+        fake_config = types.SimpleNamespace(
+            load_app_config=lambda: types.SimpleNamespace(
+                ui=types.SimpleNamespace(show_portfolio_total_in_overview=False, top_n=7),
+                content=types.SimpleNamespace(
+                    page_title="Configured Title",
+                    dashboard_title="Configured Dashboard",
+                    snapshot_description_template="Configured {snapshot_date} description",
+                ),
+            )
+        )
+
+        fake_streamlit = self.load_app(fake_config=fake_config)
+
+        self.assertEqual(fake_streamlit.page_config_calls[0]["page_title"], "Configured Title")
+        self.assertTrue(any("Configured Dashboard" in body for body in fake_streamlit.markdown_calls))
+        self.assertTrue(any("Configured 20260408 description" in body for body in fake_streamlit.markdown_calls))
