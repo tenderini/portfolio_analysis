@@ -1,11 +1,23 @@
 from __future__ import annotations
 
+from html import escape
+
 import pandas as pd
 import streamlit as st
 
+from app_theme import (
+    BAR_COLOR_SCALE,
+    DARK_ETF_COLOR_MAP,
+    TEXT_PRIMARY,
+    apply_dark_figure_layout,
+    build_bar_value_axis_range,
+    build_theme_css,
+)
+from dashboard_metrics import build_summary_metrics
 from portfolio_analysis import (
     build_report,
     filter_company_exposure,
+    format_snapshot_date,
     get_company_drilldown,
     get_dimension_drilldown,
     list_available_snapshot_dates,
@@ -22,44 +34,7 @@ st.set_page_config(
     layout="wide",
 )
 
-st.markdown(
-    """
-    <style>
-      :root {
-        --accent: #0f4c81;
-        --accent-soft: #dce8f5;
-        --panel: #f7f4ee;
-      }
-      .block-container {
-        padding-top: 1.5rem;
-        padding-bottom: 2rem;
-      }
-      .dashboard-banner {
-        background: linear-gradient(135deg, #f7f4ee 0%, #edf4fb 65%, #dce8f5 100%);
-        border: 1px solid rgba(15, 76, 129, 0.12);
-        border-radius: 18px;
-        padding: 1.25rem 1.5rem;
-        margin-bottom: 1rem;
-      }
-      .dashboard-banner h1 {
-        color: #13283d;
-        font-size: 2rem;
-        margin: 0;
-      }
-      .dashboard-banner p {
-        color: #34506a;
-        margin: 0.45rem 0 0 0;
-      }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-ETF_COLOR_MAP = {
-    "SWDA": "#0f4c81",
-    "EMIM": "#6a9ac4",
-    "WSML": "#d89a3d",
-}
+st.markdown(build_theme_css(), unsafe_allow_html=True)
 
 
 @st.cache_data(show_spinner=False)
@@ -85,16 +60,25 @@ def render_bar_chart(data: pd.DataFrame, label_column: str, title: str, top_n: i
         orientation="h",
         text="contribution_pct",
         color="contribution_pct",
-        color_continuous_scale=["#dce8f5", "#0f4c81"],
+        color_continuous_scale=BAR_COLOR_SCALE,
         title=title,
     )
-    fig.update_traces(texttemplate="%{text:.2f}%", textposition="outside")
+    fig.update_traces(texttemplate="%{text:.2f}%", textposition="outside", cliponaxis=False)
+    apply_dark_figure_layout(
+        fig,
+        title,
+        max(420, top_n * 28),
+    )
     fig.update_layout(
         coloraxis_showscale=False,
-        height=max(420, top_n * 28),
-        margin=dict(l=0, r=12, t=42, b=12),
         xaxis_title="Portfolio contribution (%)",
         yaxis_title="",
+        xaxis=dict(
+            range=build_bar_value_axis_range(chart_data["contribution_pct"]),
+            gridcolor="rgba(138, 160, 181, 0.18)",
+            zeroline=False,
+        ),
+        hoverlabel=dict(bgcolor="#0b131c", font_color=TEXT_PRIMARY, bordercolor="rgba(78, 205, 196, 0.28)"),
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -115,7 +99,7 @@ def render_pie_chart(data: pd.DataFrame, names_column: str, values_column: str, 
         title=title,
         hole=0.35,
         color=names_column,
-        color_discrete_map=ETF_COLOR_MAP,
+        color_discrete_map=DARK_ETF_COLOR_MAP,
     )
     fig.update_traces(
         textposition="inside",
@@ -123,10 +107,14 @@ def render_pie_chart(data: pd.DataFrame, names_column: str, values_column: str, 
         hovertemplate="%{label}: %{value:.2f}%<extra></extra>",
         sort=False,
     )
+    apply_dark_figure_layout(fig, title, 360)
     fig.update_layout(
         showlegend=True,
-        height=360,
-        margin=dict(l=0, r=0, t=36 if title else 12, b=12),
+        margin=dict(l=0, r=0, t=56 if title else 12, b=12),
+        legend=dict(
+            bgcolor="rgba(0, 0, 0, 0)",
+            font=dict(color=TEXT_PRIMARY),
+        ),
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -180,6 +168,29 @@ def render_etf_composition_table(df: pd.DataFrame, height: int = 220) -> None:
     )
 
 
+def render_etf_description_cards(descriptions: list[dict[str, str]]) -> None:
+    if not descriptions:
+        return
+
+    columns = st.columns(len(descriptions))
+    for column, item in zip(columns, descriptions):
+        ticker = str(item.get("ticker", "ETF"))
+        accent = DARK_ETF_COLOR_MAP.get(ticker, "#4ecdc4")
+        description = escape(str(item.get("description", "")))
+        role = escape(str(item.get("role", "")))
+        with column:
+            st.markdown(
+                f"""
+                <div class="etf-description-card" style="--etf-accent: {escape(accent)};">
+                  <div class="etf-description-ticker">{escape(ticker)}</div>
+                  <p class="etf-description-body">{description}</p>
+                  <p class="etf-description-role">{role}</p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+
 def render_breakdown_table(df: pd.DataFrame, label_column: str, height: int = 260) -> None:
     if df.empty:
         st.info("No matching rows for this selection.")
@@ -207,6 +218,40 @@ def render_breakdown_table(df: pd.DataFrame, label_column: str, height: int = 26
     )
 
 
+def render_cash_equivalent_table(df: pd.DataFrame, height: int = 320) -> None:
+    if df.empty:
+        st.info("No cash-equivalent holdings were identified for this snapshot.")
+        return
+
+    visible_columns = [
+        "company",
+        "parent_etf",
+        "country",
+        "sector",
+        "asset_class",
+        "holding_type",
+        "weight_pct",
+        "contribution_pct",
+    ]
+    available_columns = [column for column in visible_columns if column in df.columns]
+    st.dataframe(
+        df[available_columns],
+        use_container_width=True,
+        hide_index=True,
+        height=height,
+        column_config={
+            "company": st.column_config.TextColumn("Holding"),
+            "parent_etf": st.column_config.TextColumn("ETF"),
+            "country": st.column_config.TextColumn("Country"),
+            "sector": st.column_config.TextColumn("Sector"),
+            "asset_class": st.column_config.TextColumn("Asset class"),
+            "holding_type": st.column_config.TextColumn("Classification"),
+            "weight_pct": st.column_config.NumberColumn("Underlying weight", format="%.2f%%"),
+            "contribution_pct": st.column_config.NumberColumn("Portfolio contribution", format="%.2f%%"),
+        },
+    )
+
+
 available_dates = list_available_snapshot_dates()
 if not available_dates:
     st.error("No complete PIE snapshots were found in ./data.")
@@ -214,31 +259,35 @@ if not available_dates:
 
 with st.sidebar:
     st.header("Controls")
-    snapshot_date = st.selectbox("Snapshot date", options=available_dates, index=0)
+    snapshot_date = st.selectbox(
+        "Snapshot date",
+        options=available_dates,
+        index=0,
+        format_func=format_snapshot_date,
+    )
     top_n = st.select_slider("Top N", options=[10, 20, 50], value=20)
     company_search = st.text_input("Search companies", placeholder="NVIDIA, Microsoft...")
     if st.button("Refresh analysis", use_container_width=True):
         load_report.clear()
 
 report = load_report(snapshot_date)
+display_snapshot_date = format_snapshot_date(report["snapshot_date"])
 
 st.markdown(
     f"""
     <div class="dashboard-banner">
       <h1>PIE Portfolio Look-Through Dashboard</h1>
-      <p>Snapshot <strong>{report["snapshot_date"]}</strong> with drilldowns across companies, countries, sectors, and cross-ETF overlap.</p>
+      <p>Snapshot <strong>{display_snapshot_date}</strong> with drilldowns across companies, countries, sectors, and cross-ETF overlap.</p>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
 summary = report["summary"]
-metrics = st.columns(5)
-metrics[0].metric("Holdings rows", f'{summary["total_holdings_count"]:,}')
-metrics[1].metric("Companies", f'{summary["unique_companies"]:,}')
-metrics[2].metric("Countries", f'{summary["unique_countries"]:,}')
-metrics[3].metric("Sectors", f'{summary["unique_sectors"]:,}')
-metrics[4].metric("Portfolio total", f'{summary["portfolio_total_pct"]:.2f}%')
+headline_metrics = build_summary_metrics(summary)
+metric_columns = st.columns(len(headline_metrics))
+for column, metric in zip(metric_columns, headline_metrics):
+    column.metric(metric["label"], metric["value"])
 
 overview_tab, companies_tab, countries_tab, sectors_tab, overlap_tab, single_etf_tab = st.tabs(
     ["Overview", "Companies", "Countries", "Sectors", "Overlap", "Single ETF Analysis"]
@@ -247,6 +296,8 @@ overview_tab, companies_tab, countries_tab, sectors_tab, overlap_tab, single_etf
 with overview_tab:
     st.subheader("Portfolio Composition")
     st.caption("Fixed ETF allocation for the selected PIE snapshot.")
+    render_etf_description_cards(report["etf_descriptions"])
+    st.markdown('<div class="etf-description-spacer"></div>', unsafe_allow_html=True)
     composition_cols = st.columns([1.1, 0.9])
     with composition_cols[0]:
         render_pie_chart(report["etf_composition"], "parent_etf", "allocation_pct")
@@ -281,6 +332,18 @@ with overview_tab:
             "effective_holdings": st.column_config.NumberColumn("Effective holdings", format="%.2f"),
         },
     )
+
+    with st.expander("Cash-equivalent details", expanded=False):
+        st.caption(
+            "Cash-equivalents are liquidity, collateral, or derivative-support positions held by the ETF. "
+            "They are kept in the snapshot, but excluded from company overlap and company exposure analytics."
+        )
+        cash_equivalent = report["cash_equivalent_holdings"].copy()
+        cash_metrics = st.columns(3)
+        cash_metrics[0].metric("Cash-equivalent rows", f'{summary["cash_equivalent_rows"]:,}')
+        cash_metrics[1].metric("Unique labels", f'{summary["cash_equivalent_unique_labels"]:,}')
+        cash_metrics[2].metric("Portfolio contribution", f'{summary["cash_equivalent_total_pct"]:.2f}%')
+        render_cash_equivalent_table(cash_equivalent, height=320)
 
 with companies_tab:
     filtered_companies = filter_company_exposure(report["company_exposure"], company_search)

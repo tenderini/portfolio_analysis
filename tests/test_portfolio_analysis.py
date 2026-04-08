@@ -3,13 +3,22 @@ import unittest
 import pandas as pd
 
 from portfolio_analysis import (
+    _build_overlap_table,
     _build_etf_composition,
+    _is_cash_equivalent_mask,
     _build_single_etf_dimension_exposure,
     build_report,
+    format_snapshot_date,
 )
 
 
 class BuildEtfCompositionTests(unittest.TestCase):
+    def test_format_snapshot_date_returns_readable_month_day_year_label(self) -> None:
+        self.assertEqual(format_snapshot_date("20260408"), "Apr 8, 2026")
+
+    def test_format_snapshot_date_returns_original_value_when_unparseable(self) -> None:
+        self.assertEqual(format_snapshot_date("latest"), "latest")
+
     def test_build_etf_composition_collapses_duplicate_holdings_to_one_row_per_etf(self) -> None:
         combined_holdings = pd.DataFrame(
             {
@@ -60,3 +69,96 @@ class BuildEtfCompositionTests(unittest.TestCase):
         self.assertIn("country_exposure", swda)
         self.assertIn("sector_exposure", swda)
         self.assertTrue((swda["company_exposure"]["weight_pct"] >= 0).all())
+
+    def test_build_report_exposes_cash_equivalent_summary_and_details(self) -> None:
+        report = build_report(snapshot_date="20260408")
+
+        self.assertIn("cash_equivalent_rows", report["summary"])
+        self.assertGreater(report["summary"]["cash_equivalent_rows"], 0)
+        self.assertIn("cash_equivalent_holdings", report)
+        self.assertFalse(report["cash_equivalent_holdings"].empty)
+        self.assertTrue(report["cash_equivalent_holdings"]["is_cash_equivalent"].all())
+        self.assertTrue(
+            {
+                "company",
+                "country",
+                "sector",
+                "asset_class",
+                "holding_type",
+                "weight_pct",
+                "contribution_pct",
+            }.issubset(report["cash_equivalent_holdings"].columns)
+        )
+
+    def test_build_report_exposes_etf_descriptions_in_portfolio_order(self) -> None:
+        report = build_report(snapshot_date="20260408")
+
+        self.assertEqual(
+            [item["ticker"] for item in report["etf_descriptions"]],
+            ["SWDA", "EMIM", "WSML"],
+        )
+        self.assertIn("developed markets", report["etf_descriptions"][0]["description"].lower())
+        self.assertIn("emerging markets", report["etf_descriptions"][1]["description"].lower())
+        self.assertIn("small-cap", report["etf_descriptions"][2]["description"].lower())
+
+
+class CashEquivalentClassificationTests(unittest.TestCase):
+    def test_is_cash_equivalent_mask_uses_structured_fields_instead_of_company_name(self) -> None:
+        combined_holdings = pd.DataFrame(
+            {
+                "company": [
+                    "USD CASH",
+                    "FIRSTCASH HOLDINGS INC",
+                    "METCASH LTD",
+                    "LANCASHIRE HOLDINGS LTD",
+                    "CASH COLLATERAL USD BZFUT",
+                ],
+                "sector": [
+                    "Cash and/or Derivatives",
+                    "Financials",
+                    "Consumer Staples",
+                    "Financials",
+                    "Cash and/or Derivatives",
+                ],
+                "asset_class": [
+                    "Cash",
+                    "Equity",
+                    "Equity",
+                    "Equity",
+                    "Cash Collateral",
+                ],
+            }
+        )
+
+        mask = _is_cash_equivalent_mask(combined_holdings)
+
+        self.assertEqual(mask.tolist(), [True, False, False, False, True])
+
+    def test_build_overlap_table_excludes_only_cash_equivalents(self) -> None:
+        combined_holdings = pd.DataFrame(
+            {
+                "company": [
+                    "USD CASH",
+                    "USD CASH",
+                    "FIRSTCASH HOLDINGS INC",
+                    "FIRSTCASH HOLDINGS INC",
+                ],
+                "country": ["US", "US", "US", "US"],
+                "sector": [
+                    "Cash and/or Derivatives",
+                    "Cash and/or Derivatives",
+                    "Financials",
+                    "Financials",
+                ],
+                "asset_class": ["Cash", "Cash", "Equity", "Equity"],
+                "weight_pct": [0.10, 0.20, 0.30, 0.40],
+                "pie_weight": [0.78, 0.12, 0.78, 0.12],
+                "contribution_pct": [0.078, 0.024, 0.234, 0.048],
+                "parent_etf": ["SWDA", "EMIM", "SWDA", "EMIM"],
+            }
+        )
+
+        overlap = _build_overlap_table(combined_holdings)
+
+        self.assertEqual(overlap["company"].tolist(), ["FIRSTCASH HOLDINGS INC"])
+        self.assertEqual(overlap["num_etfs"].tolist(), [2])

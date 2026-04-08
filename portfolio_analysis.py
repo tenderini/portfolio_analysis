@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 import re
 from typing import Any
@@ -9,12 +10,47 @@ import pandas as pd
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 TOP_CONCENTRATION_BUCKETS = (10, 20, 50)
+ETF_DESCRIPTION_MAP = {
+    "SWDA": {
+        "ticker": "SWDA",
+        "description": (
+            "Developed markets ETF covering large- and mid-cap companies across the US, Europe, "
+            "Japan, Canada, Australia, and other developed markets."
+        ),
+        "role": "Core developed-world large and mid cap exposure.",
+    },
+    "EMIM": {
+        "ticker": "EMIM",
+        "description": (
+            "Emerging markets ETF covering large-, mid-, and small-cap companies across countries "
+            "such as China, India, Taiwan, Brazil, and South Africa."
+        ),
+        "role": "Adds the emerging-markets sleeve that SWDA does not include.",
+    },
+    "WSML": {
+        "ticker": "WSML",
+        "description": (
+            "Developed markets small-cap ETF focused on smaller companies across developed "
+            "countries globally."
+        ),
+        "role": "Fills the developed-world small-cap gap left by SWDA.",
+    },
+}
 REQUIRED_SNAPSHOT_FILES = {
     "company_exposure": "PIE_company_exposure_{date}.csv",
     "country_exposure": "PIE_country_exposure_{date}.csv",
     "sector_exposure": "PIE_sector_exposure_{date}.csv",
     "combined_holdings": "PIE_combined_holdings_detail_{date}.parquet",
 }
+
+
+def format_snapshot_date(snapshot_date: str) -> str:
+    try:
+        parsed_date = datetime.strptime(snapshot_date, "%Y%m%d")
+    except (TypeError, ValueError):
+        return str(snapshot_date)
+
+    return f'{parsed_date.strftime("%b")} {parsed_date.day}, {parsed_date.year}'
 
 
 def list_available_snapshot_dates(data_dir: Path | str = DATA_DIR) -> list[str]:
@@ -75,11 +111,13 @@ def load_snapshot_inputs(snapshot_date: str | None = None, data_dir: Path | str 
 def build_report(snapshot_date: str | None = None, data_dir: Path | str = DATA_DIR) -> dict[str, Any]:
     snapshot_inputs = load_snapshot_inputs(snapshot_date=snapshot_date, data_dir=data_dir)
     combined_holdings = snapshot_inputs["combined_holdings"]
+    company_view_holdings = _filter_company_analytics_holdings(combined_holdings)
+    cash_equivalent_holdings = _build_cash_equivalent_holdings(combined_holdings)
 
     single_etf_options = sorted(combined_holdings["parent_etf"].dropna().unique().tolist())
     single_etf_analysis = {
         etf_symbol: {
-            "company_exposure": _build_single_etf_dimension_exposure(combined_holdings, etf_symbol, "company"),
+            "company_exposure": _build_single_etf_dimension_exposure(company_view_holdings, etf_symbol, "company"),
             "country_exposure": _build_single_etf_dimension_exposure(combined_holdings, etf_symbol, "country"),
             "sector_exposure": _build_single_etf_dimension_exposure(combined_holdings, etf_symbol, "sector"),
         }
@@ -87,7 +125,7 @@ def build_report(snapshot_date: str | None = None, data_dir: Path | str = DATA_D
     }
     etf_composition = _build_etf_composition(combined_holdings)
     company_exposure = _build_dimension_exposure(
-        combined_holdings,
+        company_view_holdings,
         "company",
         fallback=snapshot_inputs["source_company_exposure"],
     )
@@ -102,23 +140,26 @@ def build_report(snapshot_date: str | None = None, data_dir: Path | str = DATA_D
         fallback=snapshot_inputs["source_sector_exposure"],
     )
 
-    company_etf_breakdown = _build_etf_breakdown(combined_holdings, "company")
+    company_etf_breakdown = _build_etf_breakdown(company_view_holdings, "company")
     country_etf_breakdown = _build_etf_breakdown(combined_holdings, "country")
     sector_etf_breakdown = _build_etf_breakdown(combined_holdings, "sector")
-    country_company_drivers = _build_company_drivers(combined_holdings, "country")
-    sector_company_drivers = _build_company_drivers(combined_holdings, "sector")
+    country_company_drivers = _build_company_drivers(company_view_holdings, "country")
+    sector_company_drivers = _build_company_drivers(company_view_holdings, "sector")
     overlap_table = _build_overlap_table(combined_holdings)
     concentration_metrics = _build_concentration_metrics(
         company_exposure=company_exposure,
         country_exposure=country_exposure,
         sector_exposure=sector_exposure,
     )
+    etf_descriptions = _build_etf_descriptions(etf_composition["parent_etf"].tolist())
 
     return {
         "snapshot_date": snapshot_inputs["snapshot_date"],
         "files": snapshot_inputs["files"],
         "combined_holdings": combined_holdings,
+        "cash_equivalent_holdings": cash_equivalent_holdings,
         "etf_composition": etf_composition,
+        "etf_descriptions": etf_descriptions,
         "single_etf_options": single_etf_options,
         "single_etf_analysis": single_etf_analysis,
         "company_exposure": company_exposure,
@@ -136,8 +177,11 @@ def build_report(snapshot_date: str | None = None, data_dir: Path | str = DATA_D
             "unique_companies": int(company_exposure["company"].nunique()),
             "unique_countries": int(country_exposure["country"].nunique()),
             "unique_sectors": int(sector_exposure["sector"].nunique()),
-            "portfolio_total_pct": float(company_exposure["contribution_pct"].sum()),
+            "portfolio_total_pct": float(combined_holdings["contribution_pct"].sum()),
             "overlap_count": int(len(overlap_table)),
+            "cash_equivalent_rows": int(len(cash_equivalent_holdings)),
+            "cash_equivalent_unique_labels": int(cash_equivalent_holdings["company"].nunique()),
+            "cash_equivalent_total_pct": float(cash_equivalent_holdings["contribution_pct"].sum()),
         },
     }
 
@@ -186,6 +230,21 @@ def get_dimension_drilldown(
     return {"etf_breakdown": etf_view, "top_companies": driver_view}
 
 
+def _build_etf_descriptions(etf_symbols: list[str]) -> list[dict[str, str]]:
+    descriptions: list[dict[str, str]] = []
+    for etf_symbol in etf_symbols:
+        description = ETF_DESCRIPTION_MAP.get(
+            etf_symbol,
+            {
+                "ticker": etf_symbol,
+                "description": "ETF included in the selected snapshot.",
+                "role": "Portfolio building block in the selected allocation.",
+            },
+        )
+        descriptions.append(description.copy())
+    return descriptions
+
+
 def _read_exposure_csv(
     file_path: Path,
     label_column: str,
@@ -221,9 +280,17 @@ def _read_combined_holdings(file_path: Path) -> pd.DataFrame:
     combined["country"] = _clean_text_series(combined["country"], unknown_label="Unknown")
     combined["sector"] = _clean_text_series(combined["sector"], unknown_label="Unknown")
     combined["parent_etf"] = _clean_text_series(combined["parent_etf"], unknown_label="Unknown")
+    asset_class_series = combined.get("asset_class", pd.Series("", index=combined.index, dtype="object"))
+    combined["asset_class"] = _clean_text_series(pd.Series(asset_class_series, index=combined.index), unknown_label="Unknown")
     combined["weight_pct"] = pd.to_numeric(combined["weight_pct"], errors="coerce").fillna(0.0)
     combined["pie_weight"] = pd.to_numeric(combined["pie_weight"], errors="coerce").fillna(0.0)
     combined["contribution_pct"] = pd.to_numeric(combined["contribution_pct"], errors="coerce").fillna(0.0)
+    combined["is_cash_equivalent"] = _is_cash_equivalent_mask(combined)
+    if "holding_type" in combined.columns:
+        combined["holding_type"] = _clean_text_series(combined["holding_type"], unknown_label="security")
+    else:
+        combined["holding_type"] = "security"
+    combined.loc[combined["is_cash_equivalent"], "holding_type"] = "cash_derivative"
 
     combined = combined.loc[combined["contribution_pct"] > 0].reset_index(drop=True)
     return combined.sort_values("contribution_pct", ascending=False).reset_index(drop=True)
@@ -311,9 +378,7 @@ def _build_etf_composition(combined_holdings: pd.DataFrame) -> pd.DataFrame:
 
 
 def _build_overlap_table(combined_holdings: pd.DataFrame) -> pd.DataFrame:
-    overlap_source = combined_holdings.loc[
-        ~combined_holdings["company"].str.contains("cash", case=False, na=False)
-    ].copy()
+    overlap_source = _filter_company_analytics_holdings(combined_holdings)
     overlap_base = (
         overlap_source.groupby("company", as_index=False)
         .agg(
@@ -352,6 +417,52 @@ def _build_overlap_table(combined_holdings: pd.DataFrame) -> pd.DataFrame:
         ["num_etfs", "total_contribution_pct", "company"],
         ascending=[False, False, True],
     ).reset_index(drop=True)
+
+
+def _build_cash_equivalent_holdings(combined_holdings: pd.DataFrame) -> pd.DataFrame:
+    cash_holdings = combined_holdings.loc[_is_cash_equivalent_mask(combined_holdings)].copy()
+    if cash_holdings.empty:
+        return cash_holdings
+    return cash_holdings.sort_values(
+        ["contribution_pct", "weight_pct", "company"],
+        ascending=[False, False, True],
+    ).reset_index(drop=True)
+
+
+def _filter_company_analytics_holdings(combined_holdings: pd.DataFrame) -> pd.DataFrame:
+    if combined_holdings.empty:
+        return combined_holdings.copy()
+    return combined_holdings.loc[~_is_cash_equivalent_mask(combined_holdings)].copy()
+
+
+def _is_cash_equivalent_mask(combined_holdings: pd.DataFrame) -> pd.Series:
+    if combined_holdings.empty:
+        return pd.Series(dtype=bool, index=combined_holdings.index)
+
+    if "is_cash_equivalent" in combined_holdings.columns:
+        raw_mask = combined_holdings["is_cash_equivalent"]
+        if pd.api.types.is_bool_dtype(raw_mask):
+            return raw_mask.fillna(False)
+        normalized = raw_mask.fillna(False).astype(str).str.strip().str.casefold()
+        return normalized.isin({"1", "true", "yes", "y"})
+
+    sector = _clean_text_series(
+        combined_holdings.get("sector", pd.Series("", index=combined_holdings.index, dtype="object")),
+        unknown_label="Unknown",
+    ).str.casefold()
+    asset_class = _clean_text_series(
+        combined_holdings.get("asset_class", pd.Series("", index=combined_holdings.index, dtype="object")),
+        unknown_label="Unknown",
+    ).str.casefold()
+    holding_type = _clean_text_series(
+        combined_holdings.get("holding_type", pd.Series("", index=combined_holdings.index, dtype="object")),
+        unknown_label="Unknown",
+    ).str.casefold()
+
+    sector_mask = sector.eq("cash and/or derivatives")
+    asset_class_mask = asset_class.str.contains("cash", regex=False) | asset_class.str.contains("derivative", regex=False)
+    holding_type_mask = holding_type.eq("cash_derivative")
+    return sector_mask | asset_class_mask | holding_type_mask
 
 
 def _build_concentration_metrics(

@@ -310,25 +310,42 @@ def _extract_standard_columns(df: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
     name_col = _pick_matching_column(df.columns.tolist(), ["Name", "Security Name", "Issuer Name", "Holding Name"])
     country_col = _pick_matching_column(df.columns.tolist(), ["Location", "Country", "Country of Risk", "Market"])
     sector_col = _pick_matching_column(df.columns.tolist(), ["Sector", "GICS Sector", "Industry Sector"])
+    asset_class_col = _pick_matching_column(df.columns.tolist(), ["Asset Class"])
 
     out = pd.DataFrame({
         "company": df[name_col] if name_col else pd.Series(index=df.index, dtype="object"),
         "country": df[country_col] if country_col else pd.Series(index=df.index, dtype="object"),
         "sector": df[sector_col] if sector_col else pd.Series(index=df.index, dtype="object"),
+        "asset_class": df[asset_class_col] if asset_class_col else pd.Series(index=df.index, dtype="object"),
         "weight_pct": pd.to_numeric(df[weight_col], errors="coerce"),
     })
     return out, weight_col
 
 
+def classify_holding_types(holdings: pd.DataFrame) -> pd.DataFrame:
+    classified = holdings.copy()
+    sector = classified["sector"].fillna("").astype(str).str.strip().str.casefold()
+    asset_class = classified["asset_class"].fillna("").astype(str).str.strip().str.casefold()
+    is_cash_equivalent = (
+        sector.eq("cash and/or derivatives")
+        | asset_class.str.contains("cash", regex=False)
+        | asset_class.str.contains("derivative", regex=False)
+    )
+    classified["is_cash_equivalent"] = is_cash_equivalent
+    classified["holding_type"] = "security"
+    classified.loc[is_cash_equivalent, "holding_type"] = "cash_derivative"
+    return classified
+
+
 def standardise_holdings(df: pd.DataFrame) -> pd.DataFrame:
     """
     Output columns:
-      company, country, sector, weight_pct
+      company, country, sector, asset_class, weight_pct, holding_type, is_cash_equivalent
     """
     out, _ = _extract_standard_columns(df)
     out = out.dropna(subset=["weight_pct"])
     out = out[out["weight_pct"] > 0]
-    return out
+    return classify_holding_types(out)
 
 
 def validate_holdings_capture(raw_df: pd.DataFrame, holdings: pd.DataFrame) -> HoldingsValidation:
