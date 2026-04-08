@@ -34,6 +34,7 @@ def build_theme_css() -> str:
         --text-secondary: #8aa0b5;
         --border: rgba(148, 163, 184, 0.16);
         --shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+        color-scheme: dark;
       }
 
       .stApp {
@@ -41,6 +42,12 @@ def build_theme_css() -> str:
           radial-gradient(circle at top right, rgba(78, 205, 196, 0.12), transparent 28%),
           linear-gradient(180deg, var(--bg-gradient-top) 0%, var(--bg-main) 55%);
         color: var(--text-primary);
+      }
+
+      [data-testid="stToolbar"],
+      header[data-testid="stHeader"],
+      #MainMenu {
+        display: none !important;
       }
 
       .block-container {

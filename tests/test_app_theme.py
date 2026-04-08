@@ -35,6 +35,8 @@ class DarkThemeTests(unittest.TestCase):
         self.assertIn('[data-baseweb="tab-highlight"]', css)
         self.assertIn(".stPlotlyChart", css)
         self.assertIn(".dashboard-banner", css)
+        self.assertIn("color-scheme: dark", css)
+        self.assertIn('[data-testid="stToolbar"]', css)
 
     def test_apply_dark_figure_layout_sets_dark_background_and_font_colors(self) -> None:
         figure = FakeFigure()
