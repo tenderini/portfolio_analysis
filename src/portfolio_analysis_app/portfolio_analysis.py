@@ -164,6 +164,7 @@ def build_report(snapshot_date: str | None = None, data_dir: Path | str = DATA_D
     combined_holdings = snapshot_inputs["combined_holdings"]
     company_view_holdings = _filter_company_analytics_holdings(combined_holdings)
     cash_equivalent_holdings = _build_cash_equivalent_holdings(combined_holdings)
+    continent_holdings = _add_continent_column(combined_holdings)
 
     single_etf_options = sorted(combined_holdings["parent_etf"].dropna().unique().tolist())
     single_etf_analysis = {
@@ -171,6 +172,7 @@ def build_report(snapshot_date: str | None = None, data_dir: Path | str = DATA_D
             "company_exposure": _build_single_etf_dimension_exposure(company_view_holdings, etf_symbol, "company"),
             "country_exposure": _build_single_etf_dimension_exposure(combined_holdings, etf_symbol, "country"),
             "sector_exposure": _build_single_etf_dimension_exposure(combined_holdings, etf_symbol, "sector"),
+            "continent_exposure": _build_single_etf_dimension_exposure(continent_holdings, etf_symbol, "continent"),
         }
         for etf_symbol in single_etf_options
     }
@@ -185,7 +187,6 @@ def build_report(snapshot_date: str | None = None, data_dir: Path | str = DATA_D
         "country",
         fallback=snapshot_inputs["source_country_exposure"],
     )
-    continent_holdings = _add_continent_column(combined_holdings)
     continent_company_holdings = _add_continent_column(company_view_holdings)
     continent_exposure = _build_dimension_exposure(continent_holdings, "continent")
     sector_exposure = _build_dimension_exposure(
