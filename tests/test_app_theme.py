@@ -78,3 +78,11 @@ class DarkThemeTests(unittest.TestCase):
 
     def test_build_bar_value_axis_range_returns_default_when_values_are_empty(self) -> None:
         self.assertEqual(build_bar_value_axis_range([]), [0.0, 1.0])
+
+    def test_build_theme_css_styles_etf_description_cards(self) -> None:
+        css = build_theme_css()
+
+        self.assertIn(".etf-description-card", css)
+        self.assertIn(".etf-description-ticker", css)
+        self.assertIn(".etf-description-role", css)
+        self.assertIn(".etf-description-spacer", css)

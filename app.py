@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from html import escape
+
 import pandas as pd
 import streamlit as st
 
@@ -166,6 +168,29 @@ def render_etf_composition_table(df: pd.DataFrame, height: int = 220) -> None:
     )
 
 
+def render_etf_description_cards(descriptions: list[dict[str, str]]) -> None:
+    if not descriptions:
+        return
+
+    columns = st.columns(len(descriptions))
+    for column, item in zip(columns, descriptions):
+        ticker = str(item.get("ticker", "ETF"))
+        accent = DARK_ETF_COLOR_MAP.get(ticker, "#4ecdc4")
+        description = escape(str(item.get("description", "")))
+        role = escape(str(item.get("role", "")))
+        with column:
+            st.markdown(
+                f"""
+                <div class="etf-description-card" style="--etf-accent: {escape(accent)};">
+                  <div class="etf-description-ticker">{escape(ticker)}</div>
+                  <p class="etf-description-body">{description}</p>
+                  <p class="etf-description-role">{role}</p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+
 def render_breakdown_table(df: pd.DataFrame, label_column: str, height: int = 260) -> None:
     if df.empty:
         st.info("No matching rows for this selection.")
@@ -271,6 +296,8 @@ overview_tab, companies_tab, countries_tab, sectors_tab, overlap_tab, single_etf
 with overview_tab:
     st.subheader("Portfolio Composition")
     st.caption("Fixed ETF allocation for the selected PIE snapshot.")
+    render_etf_description_cards(report["etf_descriptions"])
+    st.markdown('<div class="etf-description-spacer"></div>', unsafe_allow_html=True)
     composition_cols = st.columns([1.1, 0.9])
     with composition_cols[0]:
         render_pie_chart(report["etf_composition"], "parent_etf", "allocation_pct")

@@ -90,6 +90,17 @@ class BuildEtfCompositionTests(unittest.TestCase):
             }.issubset(report["cash_equivalent_holdings"].columns)
         )
 
+    def test_build_report_exposes_etf_descriptions_in_portfolio_order(self) -> None:
+        report = build_report(snapshot_date="20260408")
+
+        self.assertEqual(
+            [item["ticker"] for item in report["etf_descriptions"]],
+            ["SWDA", "EMIM", "WSML"],
+        )
+        self.assertIn("developed markets", report["etf_descriptions"][0]["description"].lower())
+        self.assertIn("emerging markets", report["etf_descriptions"][1]["description"].lower())
+        self.assertIn("small-cap", report["etf_descriptions"][2]["description"].lower())
+
 
 class CashEquivalentClassificationTests(unittest.TestCase):
     def test_is_cash_equivalent_mask_uses_structured_fields_instead_of_company_name(self) -> None:

@@ -10,6 +10,32 @@ import pandas as pd
 
 DATA_DIR = Path(__file__).resolve().parent / "data"
 TOP_CONCENTRATION_BUCKETS = (10, 20, 50)
+ETF_DESCRIPTION_MAP = {
+    "SWDA": {
+        "ticker": "SWDA",
+        "description": (
+            "Developed markets ETF covering large- and mid-cap companies across the US, Europe, "
+            "Japan, Canada, Australia, and other developed markets."
+        ),
+        "role": "Core developed-world large and mid cap exposure.",
+    },
+    "EMIM": {
+        "ticker": "EMIM",
+        "description": (
+            "Emerging markets ETF covering large-, mid-, and small-cap companies across countries "
+            "such as China, India, Taiwan, Brazil, and South Africa."
+        ),
+        "role": "Adds the emerging-markets sleeve that SWDA does not include.",
+    },
+    "WSML": {
+        "ticker": "WSML",
+        "description": (
+            "Developed markets small-cap ETF focused on smaller companies across developed "
+            "countries globally."
+        ),
+        "role": "Fills the developed-world small-cap gap left by SWDA.",
+    },
+}
 REQUIRED_SNAPSHOT_FILES = {
     "company_exposure": "PIE_company_exposure_{date}.csv",
     "country_exposure": "PIE_country_exposure_{date}.csv",
@@ -125,6 +151,7 @@ def build_report(snapshot_date: str | None = None, data_dir: Path | str = DATA_D
         country_exposure=country_exposure,
         sector_exposure=sector_exposure,
     )
+    etf_descriptions = _build_etf_descriptions(etf_composition["parent_etf"].tolist())
 
     return {
         "snapshot_date": snapshot_inputs["snapshot_date"],
@@ -132,6 +159,7 @@ def build_report(snapshot_date: str | None = None, data_dir: Path | str = DATA_D
         "combined_holdings": combined_holdings,
         "cash_equivalent_holdings": cash_equivalent_holdings,
         "etf_composition": etf_composition,
+        "etf_descriptions": etf_descriptions,
         "single_etf_options": single_etf_options,
         "single_etf_analysis": single_etf_analysis,
         "company_exposure": company_exposure,
@@ -200,6 +228,21 @@ def get_dimension_drilldown(
         .reset_index(drop=True)
     )
     return {"etf_breakdown": etf_view, "top_companies": driver_view}
+
+
+def _build_etf_descriptions(etf_symbols: list[str]) -> list[dict[str, str]]:
+    descriptions: list[dict[str, str]] = []
+    for etf_symbol in etf_symbols:
+        description = ETF_DESCRIPTION_MAP.get(
+            etf_symbol,
+            {
+                "ticker": etf_symbol,
+                "description": "ETF included in the selected snapshot.",
+                "role": "Portfolio building block in the selected allocation.",
+            },
+        )
+        descriptions.append(description.copy())
+    return descriptions
 
 
 def _read_exposure_csv(

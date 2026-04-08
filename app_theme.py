@@ -104,6 +104,44 @@ def build_theme_css() -> str:
         backdrop-filter: blur(8px);
       }
 
+      .etf-description-card {
+        background:
+          linear-gradient(180deg, rgba(17, 24, 39, 0.96) 0%, rgba(12, 22, 32, 0.98) 100%);
+        border: 1px solid var(--border);
+        border-top: 3px solid var(--etf-accent, var(--accent));
+        border-radius: 18px;
+        padding: 1rem 1rem 0.95rem 1rem;
+        min-height: 100%;
+        box-shadow: 0 16px 34px rgba(0, 0, 0, 0.14);
+      }
+
+      .etf-description-ticker {
+        color: var(--text-primary);
+        font-size: 1rem;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        margin-bottom: 0.55rem;
+      }
+
+      .etf-description-body {
+        color: var(--text-secondary);
+        font-size: 0.94rem;
+        line-height: 1.5;
+        margin: 0;
+      }
+
+      .etf-description-role {
+        color: var(--text-primary);
+        font-size: 0.88rem;
+        font-weight: 600;
+        line-height: 1.45;
+        margin: 0.85rem 0 0 0;
+      }
+
+      .etf-description-spacer {
+        height: 1rem;
+      }
+
       [data-testid="stSidebar"] {
         background:
           linear-gradient(180deg, rgba(13, 20, 29, 0.98) 0%, rgba(9, 15, 22, 0.98) 100%);
