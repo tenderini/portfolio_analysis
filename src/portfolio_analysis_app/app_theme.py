@@ -142,6 +142,11 @@ def build_theme_css() -> str:
         height: 1rem;
       }
 
+      [data-testid="stSidebar"],
+      [data-testid="stSidebarCollapsedControl"] {
+        display: none !important;
+      }
+
       [data-testid="stSidebar"] {
         background:
           linear-gradient(180deg, rgba(13, 20, 29, 0.98) 0%, rgba(9, 15, 22, 0.98) 100%);

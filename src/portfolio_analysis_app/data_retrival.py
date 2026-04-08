@@ -33,6 +33,7 @@ import re
 import html as html_lib
 from dataclasses import asdict, dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, Tuple, Optional
 
 import pandas as pd
@@ -49,7 +50,8 @@ HEADERS_UA = (
     "Chrome/120.0 Safari/537.36"
 )
 
-DATA_DIR = "data"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DATA_DIR = str(REPO_ROOT / "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 TODAY = datetime.utcnow().strftime("%Y%m%d")

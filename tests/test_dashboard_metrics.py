@@ -1,6 +1,6 @@
 import unittest
 
-from dashboard_metrics import build_summary_metrics
+from src.portfolio_analysis_app.dashboard_metrics import build_summary_metrics
 
 
 class BuildSummaryMetricsTests(unittest.TestCase):

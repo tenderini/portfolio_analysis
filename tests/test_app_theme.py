@@ -1,6 +1,6 @@
 import unittest
 
-from app_theme import (
+from src.portfolio_analysis_app.app_theme import (
     DARK_ETF_COLOR_MAP,
     apply_dark_figure_layout,
     build_bar_value_axis_range,
@@ -37,6 +37,13 @@ class DarkThemeTests(unittest.TestCase):
         self.assertIn(".dashboard-banner", css)
         self.assertIn("color-scheme: dark", css)
         self.assertIn('[data-testid="stToolbar"]', css)
+
+    def test_build_theme_css_hides_sidebar_and_collapsed_toggle(self) -> None:
+        css = build_theme_css()
+
+        self.assertIn('[data-testid="stSidebar"] {', css)
+        self.assertIn("display: none !important;", css)
+        self.assertIn('[data-testid="stSidebarCollapsedControl"]', css)
 
     def test_apply_dark_figure_layout_sets_dark_background_and_font_colors(self) -> None:
         figure = FakeFigure()

@@ -1,0 +1,8 @@
+[ui]
+show_portfolio_total_in_overview = false
+top_n = 20
+
+[content]
+page_title = "PIE Portfolio Analysis"
+dashboard_title = "PIE Portfolio Look-Through Dashboard"
+snapshot_description_template = "Snapshot <strong>{snapshot_date}</strong> with drilldowns across companies, countries, sectors, and cross-ETF overlap."
