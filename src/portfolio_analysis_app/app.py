@@ -1,28 +1,55 @@
 from __future__ import annotations
 
 from html import escape
+from pathlib import Path
+import sys
 
 import pandas as pd
 import streamlit as st
 
-from .app_config import load_app_config
-from .app_theme import (
-    BAR_COLOR_SCALE,
-    DARK_ETF_COLOR_MAP,
-    TEXT_PRIMARY,
-    apply_dark_figure_layout,
-    build_bar_value_axis_range,
-    build_theme_css,
-)
-from .dashboard_metrics import build_summary_metrics
-from .portfolio_analysis import (
-    build_report,
-    filter_company_exposure,
-    format_snapshot_date,
-    get_company_drilldown,
-    get_dimension_drilldown,
-    list_available_snapshot_dates,
-)
+if __package__ in {None, ""}:
+    # Streamlit Cloud can execute this file directly instead of importing it as a package module.
+    repo_root = Path(__file__).resolve().parents[2]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+    from src.portfolio_analysis_app.app_config import load_app_config
+    from src.portfolio_analysis_app.app_theme import (
+        BAR_COLOR_SCALE,
+        DARK_ETF_COLOR_MAP,
+        TEXT_PRIMARY,
+        apply_dark_figure_layout,
+        build_bar_value_axis_range,
+        build_theme_css,
+    )
+    from src.portfolio_analysis_app.dashboard_metrics import build_summary_metrics
+    from src.portfolio_analysis_app.portfolio_analysis import (
+        build_report,
+        filter_company_exposure,
+        format_snapshot_date,
+        get_company_drilldown,
+        get_dimension_drilldown,
+        list_available_snapshot_dates,
+    )
+else:
+    from .app_config import load_app_config
+    from .app_theme import (
+        BAR_COLOR_SCALE,
+        DARK_ETF_COLOR_MAP,
+        TEXT_PRIMARY,
+        apply_dark_figure_layout,
+        build_bar_value_axis_range,
+        build_theme_css,
+    )
+    from .dashboard_metrics import build_summary_metrics
+    from .portfolio_analysis import (
+        build_report,
+        filter_company_exposure,
+        format_snapshot_date,
+        get_company_drilldown,
+        get_dimension_drilldown,
+        list_available_snapshot_dates,
+    )
 
 try:
     import plotly.express as px
@@ -512,3 +539,7 @@ def main() -> None:
                 )
             with section_cols[1]:
                 render_weight_table(section_data, label_column, height=360)
+
+
+if __name__ == "__main__":
+    main()
