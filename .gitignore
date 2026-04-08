@@ -29,6 +29,7 @@ env/
 
 # Local tooling
 .superpowers/
+docs
 
 # Debug artifacts
 debug_product_page_rendered.html
