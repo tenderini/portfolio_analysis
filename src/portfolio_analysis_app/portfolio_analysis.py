@@ -8,7 +8,8 @@ from typing import Any
 import pandas as pd
 
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DATA_DIR = REPO_ROOT / "data"
 TOP_CONCENTRATION_BUCKETS = (10, 20, 50)
 ETF_DESCRIPTION_MAP = {
     "SWDA": {

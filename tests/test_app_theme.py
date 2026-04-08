@@ -1,6 +1,6 @@
 import unittest
 
-from app_theme import (
+from src.portfolio_analysis_app.app_theme import (
     DARK_ETF_COLOR_MAP,
     apply_dark_figure_layout,
     build_bar_value_axis_range,

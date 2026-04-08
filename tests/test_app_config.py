@@ -4,7 +4,7 @@ import unittest
 
 class AppConfigTests(unittest.TestCase):
     def test_load_app_config_returns_defaults_when_file_is_missing(self) -> None:
-        from app_config import DEFAULT_CONFIG, load_app_config
+        from src.portfolio_analysis_app.app_config import DEFAULT_CONFIG, load_app_config
 
         config = load_app_config(Path("tests/fixtures/does-not-exist.toml"))
 
@@ -14,7 +14,7 @@ class AppConfigTests(unittest.TestCase):
         self.assertEqual(config.content.dashboard_title, DEFAULT_CONFIG.content.dashboard_title)
 
     def test_load_app_config_reads_values_from_toml(self) -> None:
-        from app_config import load_app_config
+        from src.portfolio_analysis_app.app_config import load_app_config
 
         fixture = Path("tests/tmp_config.toml")
         fixture.write_text(

@@ -292,19 +292,21 @@ class AppLayoutTests(unittest.TestCase):
             name: sys.modules.get(name)
             for name in [
                 "streamlit",
-                "app_config",
-                "app_theme",
-                "dashboard_metrics",
-                "portfolio_analysis",
+                "src.portfolio_analysis_app.app",
+                "src.portfolio_analysis_app.app_config",
+                "src.portfolio_analysis_app.app_theme",
+                "src.portfolio_analysis_app.dashboard_metrics",
+                "src.portfolio_analysis_app.portfolio_analysis",
                 "plotly",
                 "plotly.express",
             ]
         }
         sys.modules["streamlit"] = fake_streamlit
-        sys.modules["app_config"] = fake_config
-        sys.modules["app_theme"] = fake_theme
-        sys.modules["dashboard_metrics"] = fake_metrics
-        sys.modules["portfolio_analysis"] = fake_portfolio
+        sys.modules.pop("src.portfolio_analysis_app.app", None)
+        sys.modules["src.portfolio_analysis_app.app_config"] = fake_config
+        sys.modules["src.portfolio_analysis_app.app_theme"] = fake_theme
+        sys.modules["src.portfolio_analysis_app.dashboard_metrics"] = fake_metrics
+        sys.modules["src.portfolio_analysis_app.portfolio_analysis"] = fake_portfolio
         sys.modules["plotly"] = fake_plotly
         sys.modules["plotly.express"] = fake_plotly_express
 

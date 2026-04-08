@@ -2,7 +2,7 @@ import unittest
 
 import pandas as pd
 
-from portfolio_analysis import (
+from src.portfolio_analysis_app.portfolio_analysis import (
     _build_continent_exposure,
     _build_overlap_table,
     _build_etf_composition,

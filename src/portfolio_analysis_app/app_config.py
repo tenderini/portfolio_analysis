@@ -33,10 +33,11 @@ class AppConfig:
 
 
 DEFAULT_CONFIG = AppConfig()
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def load_app_config(path: Path | None = None) -> AppConfig:
-    config_path = path or Path("config.toml")
+    config_path = path or REPO_ROOT / "config.toml"
     if not config_path.exists():
         return DEFAULT_CONFIG
 
