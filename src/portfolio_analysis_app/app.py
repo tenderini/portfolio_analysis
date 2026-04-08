@@ -56,6 +56,10 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     px = None
 
+
+PLOTLY_STATIC_CONFIG = {"staticPlot": True, "displayModeBar": False}
+
+
 @st.cache_data(show_spinner=False)
 def load_report(snapshot_date: str) -> dict:
     return build_report(snapshot_date=snapshot_date)
@@ -99,7 +103,7 @@ def render_bar_chart(data: pd.DataFrame, label_column: str, title: str, top_n: i
         ),
         hoverlabel=dict(bgcolor="#0b131c", font_color=TEXT_PRIMARY, bordercolor="rgba(78, 205, 196, 0.28)"),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_STATIC_CONFIG)
 
 
 def render_pie_chart(data: pd.DataFrame, names_column: str, values_column: str, title: str | None = None) -> None:
@@ -135,7 +139,7 @@ def render_pie_chart(data: pd.DataFrame, names_column: str, values_column: str, 
             font=dict(color=TEXT_PRIMARY),
         ),
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, config=PLOTLY_STATIC_CONFIG)
 
 
 def render_exposure_table(df: pd.DataFrame, label_column: str, height: int = 420) -> None:
