@@ -30,6 +30,7 @@ env/
 # Local tooling
 .superpowers/
 docs
+.streamlit/
 
 # Debug artifacts
 debug_product_page_rendered.html
