@@ -70,6 +70,7 @@ class BuildEtfCompositionTests(unittest.TestCase):
         self.assertIn("company_exposure", swda)
         self.assertIn("country_exposure", swda)
         self.assertIn("sector_exposure", swda)
+        self.assertIn("continent_exposure", swda)
         self.assertTrue((swda["company_exposure"]["weight_pct"] >= 0).all())
 
     def test_build_report_exposes_cash_equivalent_summary_and_details(self) -> None:

@@ -42,6 +42,9 @@ class FakeStreamlit(types.ModuleType):
         self.metric_calls: list[tuple] = []
         self.page_config_calls: list[dict] = []
         self.markdown_calls: list[str] = []
+        self.dataframe_calls: list[dict] = []
+        self.bar_titles: list[str | None] = []
+        self.bar_figures: list["FakeFigure"] = []
         self.column_config = FakeColumnConfig()
         self.sidebar = self._Sidebar(self)
 
@@ -87,7 +90,8 @@ class FakeStreamlit(types.ModuleType):
     def caption(self, *args, **kwargs):
         return None
 
-    def dataframe(self, *args, **kwargs):
+    def dataframe(self, data=None, *args, **kwargs):
+        self.dataframe_calls.append({"data": data, "kwargs": kwargs})
         return None
 
     def bar_chart(self, *args, **kwargs):
@@ -125,14 +129,24 @@ class FakeStreamlit(types.ModuleType):
 
 
 class FakeFigure:
+    def __init__(self) -> None:
+        self.updated_layout: dict = {}
+
     def update_traces(self, *args, **kwargs):
         return self
 
     def update_layout(self, *args, **kwargs):
+        self.updated_layout.update(kwargs)
         return self
 
 
 def build_fake_report() -> dict:
+    single_etf_company_exposure = pd.DataFrame(
+        {
+            "company": [f"Company {index}" for index in range(1, 26)],
+            "weight_pct": [float(index) for index in range(25, 0, -1)],
+        }
+    )
     company_exposure = pd.DataFrame(
         {"company": ["Apple", "Microsoft"], "contribution_pct": [4.0, 3.0]}
     )
@@ -160,9 +174,9 @@ def build_fake_report() -> dict:
             "unique_countries": 2,
             "unique_sectors": 2,
             "portfolio_total_pct": 100.0,
-            "cash_equivalent_rows": 0,
-            "cash_equivalent_unique_labels": 0,
-            "cash_equivalent_total_pct": 0.0,
+            "cash_equivalent_rows": 1,
+            "cash_equivalent_unique_labels": 1,
+            "cash_equivalent_total_pct": 0.4,
         },
         "etf_descriptions": [
             {"ticker": "SWDA", "description": "Developed markets", "role": "Core exposure"},
@@ -196,15 +210,17 @@ def build_fake_report() -> dict:
             }
         ),
         "cash_equivalent_holdings": pd.DataFrame(
-            columns=[
-                "company",
-                "parent_etf",
-                "country",
-                "sector",
-                "asset_class",
-                "holding_type",
-                "weight_pct",
-                "contribution_pct",
+            [
+                {
+                    "company": "USD CASH",
+                    "parent_etf": "SWDA",
+                    "country": "US",
+                    "sector": "Cash and/or Derivatives",
+                    "asset_class": "Cash",
+                    "holding_type": "Cash",
+                    "weight_pct": 0.5,
+                    "contribution_pct": 0.4,
+                }
             ]
         ),
         "company_etf_breakdown": breakdown[["company", "parent_etf", "contribution_pct", "underlying_weight_pct", "line_items"]],
@@ -232,9 +248,16 @@ def build_fake_report() -> dict:
         "single_etf_options": ["SWDA"],
         "single_etf_analysis": {
             "SWDA": {
-                "company_exposure": pd.DataFrame({"company": ["Apple"], "weight_pct": [5.0]}),
-                "country_exposure": pd.DataFrame({"country": ["US"], "weight_pct": [60.0]}),
-                "sector_exposure": pd.DataFrame({"sector": ["Technology"], "weight_pct": [25.0]}),
+                "company_exposure": single_etf_company_exposure,
+                "country_exposure": pd.DataFrame(
+                    {"country": ["US", "JP", "DE"], "weight_pct": [60.0, 25.0, 15.0]}
+                ),
+                "sector_exposure": pd.DataFrame(
+                    {"sector": ["Technology", "Financials"], "weight_pct": [70.0, 30.0]}
+                ),
+                "continent_exposure": pd.DataFrame(
+                    {"continent": ["North America", "Europe"], "weight_pct": [75.0, 25.0]}
+                ),
             }
         },
     }
@@ -283,9 +306,16 @@ class AppLayoutTests(unittest.TestCase):
             },
             list_available_snapshot_dates=lambda: ["20260408", "20260314"],
         )
+
+        def fake_bar(*args, **kwargs):
+            fake_streamlit.bar_titles.append(kwargs.get("title"))
+            figure = FakeFigure()
+            fake_streamlit.bar_figures.append(figure)
+            return figure
+
         fake_plotly = types.ModuleType("plotly")
         fake_plotly_express = types.SimpleNamespace(
-            bar=lambda *args, **kwargs: FakeFigure(),
+            bar=fake_bar,
             pie=lambda *args, **kwargs: FakeFigure(),
         )
         previous_modules = {
@@ -389,3 +419,112 @@ class AppLayoutTests(unittest.TestCase):
         self.assertEqual(fake_streamlit.page_config_calls[0]["page_title"], "Configured Title")
         self.assertTrue(any("Configured Dashboard" in body for body in fake_streamlit.markdown_calls))
         self.assertTrue(any("Configured 20260408 description" in body for body in fake_streamlit.markdown_calls))
+
+    def test_overview_top_exposures_shows_four_charts_without_duplicate_tables(self) -> None:
+        fake_streamlit = self.load_app()
+
+        overview_exposure_tables = [
+            call
+            for call in fake_streamlit.dataframe_calls
+            if list(getattr(call["data"], "columns", [])) in (
+                ["company", "contribution_pct"],
+                ["country", "contribution_pct"],
+                ["sector", "contribution_pct"],
+            )
+            and call["kwargs"].get("height") == 320
+        ]
+
+        self.assertEqual(overview_exposure_tables, [])
+        self.assertTrue(
+            {"Top companies", "Top countries", "Top sectors", "Top continents"}.issubset(
+                set(title for title in fake_streamlit.bar_titles if title)
+            )
+        )
+
+    def test_single_etf_analysis_shows_counts_continents_and_all_company_rows(self) -> None:
+        fake_streamlit = self.load_app()
+
+        self.assertIn(("Companies", "25"), fake_streamlit.metric_calls)
+        self.assertIn(("Countries", "3"), fake_streamlit.metric_calls)
+        self.assertIn(("Sectors", "2"), fake_streamlit.metric_calls)
+        self.assertIn("SWDA Top continents", set(title for title in fake_streamlit.bar_titles if title))
+
+        company_weight_tables = [
+            call
+            for call in fake_streamlit.dataframe_calls
+            if list(getattr(call["data"], "columns", [])) == ["company", "weight_pct"]
+            and call["kwargs"].get("height") == 360
+        ]
+
+        self.assertEqual(len(company_weight_tables), 1)
+        self.assertEqual(len(company_weight_tables[0]["data"]), 25)
+
+    def test_breakdown_tables_use_etf_weight_and_show_holdings_count(self) -> None:
+        fake_streamlit = self.load_app()
+
+        company_breakdown_tables = [
+            call
+            for call in fake_streamlit.dataframe_calls
+            if call["kwargs"].get("height") == 340
+            and list(getattr(call["data"], "columns", []))
+            == ["company", "parent_etf", "contribution_pct", "underlying_weight_pct", "line_items"]
+        ]
+        self.assertEqual(len(company_breakdown_tables), 1)
+        company_config = company_breakdown_tables[0]["kwargs"]["column_config"]
+        self.assertEqual(company_config["underlying_weight_pct"]["args"][0], "ETF weight")
+        self.assertEqual(company_config["line_items"]["args"][0], "Holdings count")
+
+        etf_breakdown_tables = [
+            call
+            for call in fake_streamlit.dataframe_calls
+            if call["kwargs"].get("height") == 280
+            and "underlying_weight_pct" in getattr(call["data"], "columns", [])
+            and "line_items" in getattr(call["data"], "columns", [])
+        ]
+        self.assertGreaterEqual(len(etf_breakdown_tables), 3)
+        for call in etf_breakdown_tables:
+            column_config = call["kwargs"]["column_config"]
+            self.assertEqual(column_config["underlying_weight_pct"]["args"][0], "ETF weight")
+            self.assertEqual(column_config["line_items"]["args"][0], "Holdings count")
+
+        cash_equivalent_tables = [
+            call
+            for call in fake_streamlit.dataframe_calls
+            if list(getattr(call["data"], "columns", []))
+            == [
+                "company",
+                "parent_etf",
+                "country",
+                "sector",
+                "asset_class",
+                "holding_type",
+                "weight_pct",
+                "contribution_pct",
+            ]
+        ]
+        self.assertEqual(len(cash_equivalent_tables), 1)
+        cash_config = cash_equivalent_tables[0]["kwargs"]["column_config"]
+        self.assertEqual(cash_config["weight_pct"]["args"][0], "ETF weight")
+        self.assertEqual(cash_config["contribution_pct"]["args"][0], "Portfolio weight")
+        self.assertIn(("Portfolio weight", "0.40%"), fake_streamlit.metric_calls)
+
+        contribution_tables = [
+            call
+            for call in fake_streamlit.dataframe_calls
+            if "contribution_pct" in getattr(call["data"], "columns", [])
+            and "column_config" in call["kwargs"]
+            and "contribution_pct" in call["kwargs"]["column_config"]
+        ]
+        self.assertTrue(contribution_tables)
+        for call in contribution_tables:
+            contribution_config = call["kwargs"]["column_config"]["contribution_pct"]
+            self.assertEqual(contribution_config["args"][0], "Portfolio weight")
+
+        self.assertTrue(fake_streamlit.bar_figures)
+        self.assertTrue(
+            all(
+                figure.updated_layout.get("xaxis_title") == "Portfolio weight (%)"
+                for figure in fake_streamlit.bar_figures
+                if "xaxis_title" in figure.updated_layout
+            )
+        )

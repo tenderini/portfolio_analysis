@@ -63,7 +63,7 @@ def render_bar_chart(data: pd.DataFrame, label_column: str, title: str, top_n: i
     )
     fig.update_layout(
         coloraxis_showscale=False,
-        xaxis_title="Portfolio contribution (%)",
+        xaxis_title="Portfolio weight (%)",
         yaxis_title="",
         xaxis=dict(
             range=build_bar_value_axis_range(chart_data["contribution_pct"]),
@@ -120,7 +120,7 @@ def render_exposure_table(df: pd.DataFrame, label_column: str, height: int = 420
         column_config={
             label_column: st.column_config.TextColumn(label_column.replace("_", " ").title()),
             "contribution_pct": st.column_config.NumberColumn(
-                "Contribution",
+                "Portfolio weight",
                 format="%.2f%%",
             ),
         },
@@ -183,7 +183,12 @@ def render_etf_description_cards(descriptions: list[dict[str, str]]) -> None:
             )
 
 
-def render_breakdown_table(df: pd.DataFrame, label_column: str, height: int = 260) -> None:
+def render_breakdown_table(
+    df: pd.DataFrame,
+    label_column: str,
+    height: int = 260,
+    show_holdings_count: bool = True,
+) -> None:
     if df.empty:
         st.info("No matching rows for this selection.")
         return
@@ -191,15 +196,15 @@ def render_breakdown_table(df: pd.DataFrame, label_column: str, height: int = 26
     column_config = {
         label_column: st.column_config.TextColumn(label_column.replace("_", " ").title()),
         "parent_etf": st.column_config.TextColumn("ETF"),
-        "contribution_pct": st.column_config.NumberColumn("Contribution", format="%.2f%%"),
+        "contribution_pct": st.column_config.NumberColumn("Portfolio weight", format="%.2f%%"),
     }
     if "underlying_weight_pct" in df.columns:
         column_config["underlying_weight_pct"] = st.column_config.NumberColumn(
-            "Underlying weight",
+            "ETF weight",
             format="%.2f%%",
         )
-    if "line_items" in df.columns:
-        column_config["line_items"] = st.column_config.NumberColumn("Lines", format="%d")
+    if "line_items" in df.columns and show_holdings_count:
+        column_config["line_items"] = st.column_config.NumberColumn("Holdings count", format="%d")
 
     st.dataframe(
         df,
@@ -238,8 +243,8 @@ def render_cash_equivalent_table(df: pd.DataFrame, height: int = 320) -> None:
             "sector": st.column_config.TextColumn("Sector"),
             "asset_class": st.column_config.TextColumn("Asset class"),
             "holding_type": st.column_config.TextColumn("Classification"),
-            "weight_pct": st.column_config.NumberColumn("Underlying weight", format="%.2f%%"),
-            "contribution_pct": st.column_config.NumberColumn("Portfolio contribution", format="%.2f%%"),
+            "weight_pct": st.column_config.NumberColumn("ETF weight", format="%.2f%%"),
+            "contribution_pct": st.column_config.NumberColumn("Portfolio weight", format="%.2f%%"),
         },
     )
 
@@ -301,16 +306,18 @@ def main() -> None:
             render_etf_composition_table(report["etf_composition"])
 
         st.subheader("Top Exposures")
-        overview_cols = st.columns(3)
         top_sections = [
             ("company_exposure", "company", "Top companies"),
             ("country_exposure", "country", "Top countries"),
             ("sector_exposure", "sector", "Top sectors"),
+            ("continent_exposure", "continent", "Top continents"),
         ]
-        for column, (report_key, label_column, title) in zip(overview_cols, top_sections):
-            with column:
-                render_bar_chart(report[report_key], label_column, title, top_n)
-                render_exposure_table(report[report_key].head(top_n), label_column, height=320)
+        for row_start in range(0, len(top_sections), 2):
+            overview_cols = st.columns(2)
+            row_sections = top_sections[row_start : row_start + 2]
+            for column, (report_key, label_column, title) in zip(overview_cols, row_sections):
+                with column:
+                    render_bar_chart(report[report_key], label_column, title, top_n)
 
         st.subheader("Concentration Metrics")
         concentration = report["concentration_metrics"].copy()
@@ -338,7 +345,7 @@ def main() -> None:
             cash_metrics = st.columns(3)
             cash_metrics[0].metric("Cash-equivalent rows", f'{summary["cash_equivalent_rows"]:,}')
             cash_metrics[1].metric("Unique labels", f'{summary["cash_equivalent_unique_labels"]:,}')
-            cash_metrics[2].metric("Portfolio contribution", f'{summary["cash_equivalent_total_pct"]:.2f}%')
+            cash_metrics[2].metric("Portfolio weight", f'{summary["cash_equivalent_total_pct"]:.2f}%')
             render_cash_equivalent_table(cash_equivalent, height=320)
 
     with companies_tab:
@@ -477,14 +484,19 @@ def main() -> None:
 
     with single_etf_tab:
         st.subheader("Single ETF Analysis")
-        st.caption("Inspect ETF-internal weights across companies, countries, and sectors.")
+        st.caption("Inspect ETF-internal weights across companies, countries, sectors, and continents.")
 
         selected_etf = st.selectbox("Select ETF", options=report["single_etf_options"])
         etf_report = report["single_etf_analysis"].get(selected_etf, {})
+        single_etf_metrics = st.columns(3)
+        single_etf_metrics[0].metric("Companies", f'{len(etf_report.get("company_exposure", [])):,}')
+        single_etf_metrics[1].metric("Countries", f'{len(etf_report.get("country_exposure", [])):,}')
+        single_etf_metrics[2].metric("Sectors", f'{len(etf_report.get("sector_exposure", [])):,}')
         sections = [
             ("Top companies", "company", "company_exposure"),
             ("Top countries", "country", "country_exposure"),
             ("Top sectors", "sector", "sector_exposure"),
+            ("Top continents", "continent", "continent_exposure"),
         ]
 
         for section_title, label_column, data_key in sections:
@@ -499,4 +511,4 @@ def main() -> None:
                     top_n,
                 )
             with section_cols[1]:
-                render_weight_table(section_data.head(top_n), label_column, height=360)
+                render_weight_table(section_data, label_column, height=360)
