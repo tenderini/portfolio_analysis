@@ -8,10 +8,17 @@ from portfolio_analysis import (
     _is_cash_equivalent_mask,
     _build_single_etf_dimension_exposure,
     build_report,
+    format_snapshot_date,
 )
 
 
 class BuildEtfCompositionTests(unittest.TestCase):
+    def test_format_snapshot_date_returns_readable_month_day_year_label(self) -> None:
+        self.assertEqual(format_snapshot_date("20260408"), "Apr 8, 2026")
+
+    def test_format_snapshot_date_returns_original_value_when_unparseable(self) -> None:
+        self.assertEqual(format_snapshot_date("latest"), "latest")
+
     def test_build_etf_composition_collapses_duplicate_holdings_to_one_row_per_etf(self) -> None:
         combined_holdings = pd.DataFrame(
             {
@@ -62,6 +69,26 @@ class BuildEtfCompositionTests(unittest.TestCase):
         self.assertIn("country_exposure", swda)
         self.assertIn("sector_exposure", swda)
         self.assertTrue((swda["company_exposure"]["weight_pct"] >= 0).all())
+
+    def test_build_report_exposes_cash_equivalent_summary_and_details(self) -> None:
+        report = build_report(snapshot_date="20260408")
+
+        self.assertIn("cash_equivalent_rows", report["summary"])
+        self.assertGreater(report["summary"]["cash_equivalent_rows"], 0)
+        self.assertIn("cash_equivalent_holdings", report)
+        self.assertFalse(report["cash_equivalent_holdings"].empty)
+        self.assertTrue(report["cash_equivalent_holdings"]["is_cash_equivalent"].all())
+        self.assertTrue(
+            {
+                "company",
+                "country",
+                "sector",
+                "asset_class",
+                "holding_type",
+                "weight_pct",
+                "contribution_pct",
+            }.issubset(report["cash_equivalent_holdings"].columns)
+        )
 
 
 class CashEquivalentClassificationTests(unittest.TestCase):

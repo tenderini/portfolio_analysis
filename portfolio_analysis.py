@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 import re
 from typing import Any
@@ -15,6 +16,15 @@ REQUIRED_SNAPSHOT_FILES = {
     "sector_exposure": "PIE_sector_exposure_{date}.csv",
     "combined_holdings": "PIE_combined_holdings_detail_{date}.parquet",
 }
+
+
+def format_snapshot_date(snapshot_date: str) -> str:
+    try:
+        parsed_date = datetime.strptime(snapshot_date, "%Y%m%d")
+    except (TypeError, ValueError):
+        return str(snapshot_date)
+
+    return f'{parsed_date.strftime("%b")} {parsed_date.day}, {parsed_date.year}'
 
 
 def list_available_snapshot_dates(data_dir: Path | str = DATA_DIR) -> list[str]:
@@ -76,6 +86,7 @@ def build_report(snapshot_date: str | None = None, data_dir: Path | str = DATA_D
     snapshot_inputs = load_snapshot_inputs(snapshot_date=snapshot_date, data_dir=data_dir)
     combined_holdings = snapshot_inputs["combined_holdings"]
     company_view_holdings = _filter_company_analytics_holdings(combined_holdings)
+    cash_equivalent_holdings = _build_cash_equivalent_holdings(combined_holdings)
 
     single_etf_options = sorted(combined_holdings["parent_etf"].dropna().unique().tolist())
     single_etf_analysis = {
@@ -119,6 +130,7 @@ def build_report(snapshot_date: str | None = None, data_dir: Path | str = DATA_D
         "snapshot_date": snapshot_inputs["snapshot_date"],
         "files": snapshot_inputs["files"],
         "combined_holdings": combined_holdings,
+        "cash_equivalent_holdings": cash_equivalent_holdings,
         "etf_composition": etf_composition,
         "single_etf_options": single_etf_options,
         "single_etf_analysis": single_etf_analysis,
@@ -139,6 +151,9 @@ def build_report(snapshot_date: str | None = None, data_dir: Path | str = DATA_D
             "unique_sectors": int(sector_exposure["sector"].nunique()),
             "portfolio_total_pct": float(combined_holdings["contribution_pct"].sum()),
             "overlap_count": int(len(overlap_table)),
+            "cash_equivalent_rows": int(len(cash_equivalent_holdings)),
+            "cash_equivalent_unique_labels": int(cash_equivalent_holdings["company"].nunique()),
+            "cash_equivalent_total_pct": float(cash_equivalent_holdings["contribution_pct"].sum()),
         },
     }
 
@@ -357,6 +372,16 @@ def _build_overlap_table(combined_holdings: pd.DataFrame) -> pd.DataFrame:
     )
     return overlap_table.sort_values(
         ["num_etfs", "total_contribution_pct", "company"],
+        ascending=[False, False, True],
+    ).reset_index(drop=True)
+
+
+def _build_cash_equivalent_holdings(combined_holdings: pd.DataFrame) -> pd.DataFrame:
+    cash_holdings = combined_holdings.loc[_is_cash_equivalent_mask(combined_holdings)].copy()
+    if cash_holdings.empty:
+        return cash_holdings
+    return cash_holdings.sort_values(
+        ["contribution_pct", "weight_pct", "company"],
         ascending=[False, False, True],
     ).reset_index(drop=True)
 

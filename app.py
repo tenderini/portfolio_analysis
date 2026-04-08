@@ -6,6 +6,7 @@ import streamlit as st
 from portfolio_analysis import (
     build_report,
     filter_company_exposure,
+    format_snapshot_date,
     get_company_drilldown,
     get_dimension_drilldown,
     list_available_snapshot_dates,
@@ -207,6 +208,40 @@ def render_breakdown_table(df: pd.DataFrame, label_column: str, height: int = 26
     )
 
 
+def render_cash_equivalent_table(df: pd.DataFrame, height: int = 320) -> None:
+    if df.empty:
+        st.info("No cash-equivalent holdings were identified for this snapshot.")
+        return
+
+    visible_columns = [
+        "company",
+        "parent_etf",
+        "country",
+        "sector",
+        "asset_class",
+        "holding_type",
+        "weight_pct",
+        "contribution_pct",
+    ]
+    available_columns = [column for column in visible_columns if column in df.columns]
+    st.dataframe(
+        df[available_columns],
+        use_container_width=True,
+        hide_index=True,
+        height=height,
+        column_config={
+            "company": st.column_config.TextColumn("Holding"),
+            "parent_etf": st.column_config.TextColumn("ETF"),
+            "country": st.column_config.TextColumn("Country"),
+            "sector": st.column_config.TextColumn("Sector"),
+            "asset_class": st.column_config.TextColumn("Asset class"),
+            "holding_type": st.column_config.TextColumn("Classification"),
+            "weight_pct": st.column_config.NumberColumn("Underlying weight", format="%.2f%%"),
+            "contribution_pct": st.column_config.NumberColumn("Portfolio contribution", format="%.2f%%"),
+        },
+    )
+
+
 available_dates = list_available_snapshot_dates()
 if not available_dates:
     st.error("No complete PIE snapshots were found in ./data.")
@@ -214,31 +249,38 @@ if not available_dates:
 
 with st.sidebar:
     st.header("Controls")
-    snapshot_date = st.selectbox("Snapshot date", options=available_dates, index=0)
+    snapshot_date = st.selectbox(
+        "Snapshot date",
+        options=available_dates,
+        index=0,
+        format_func=format_snapshot_date,
+    )
     top_n = st.select_slider("Top N", options=[10, 20, 50], value=20)
     company_search = st.text_input("Search companies", placeholder="NVIDIA, Microsoft...")
     if st.button("Refresh analysis", use_container_width=True):
         load_report.clear()
 
 report = load_report(snapshot_date)
+display_snapshot_date = format_snapshot_date(report["snapshot_date"])
 
 st.markdown(
     f"""
     <div class="dashboard-banner">
       <h1>PIE Portfolio Look-Through Dashboard</h1>
-      <p>Snapshot <strong>{report["snapshot_date"]}</strong> with drilldowns across companies, countries, sectors, and cross-ETF overlap.</p>
+      <p>Snapshot <strong>{display_snapshot_date}</strong> with drilldowns across companies, countries, sectors, and cross-ETF overlap.</p>
     </div>
     """,
     unsafe_allow_html=True,
 )
 
 summary = report["summary"]
-metrics = st.columns(5)
+metrics = st.columns(6)
 metrics[0].metric("Holdings rows", f'{summary["total_holdings_count"]:,}')
 metrics[1].metric("Companies", f'{summary["unique_companies"]:,}')
 metrics[2].metric("Countries", f'{summary["unique_countries"]:,}')
 metrics[3].metric("Sectors", f'{summary["unique_sectors"]:,}')
 metrics[4].metric("Portfolio total", f'{summary["portfolio_total_pct"]:.2f}%')
+metrics[5].metric("Cash-equivalent rows", f'{summary["cash_equivalent_rows"]:,}')
 
 overview_tab, companies_tab, countries_tab, sectors_tab, overlap_tab, single_etf_tab = st.tabs(
     ["Overview", "Companies", "Countries", "Sectors", "Overlap", "Single ETF Analysis"]
@@ -281,6 +323,18 @@ with overview_tab:
             "effective_holdings": st.column_config.NumberColumn("Effective holdings", format="%.2f"),
         },
     )
+
+    with st.expander("Cash-equivalent details", expanded=False):
+        st.caption(
+            "Cash-equivalents are liquidity, collateral, or derivative-support positions held by the ETF. "
+            "They are kept in the snapshot, but excluded from company overlap and company exposure analytics."
+        )
+        cash_equivalent = report["cash_equivalent_holdings"].copy()
+        cash_metrics = st.columns(3)
+        cash_metrics[0].metric("Cash-equivalent rows", f'{summary["cash_equivalent_rows"]:,}')
+        cash_metrics[1].metric("Unique labels", f'{summary["cash_equivalent_unique_labels"]:,}')
+        cash_metrics[2].metric("Portfolio contribution", f'{summary["cash_equivalent_total_pct"]:.2f}%')
+        render_cash_equivalent_table(cash_equivalent, height=320)
 
 with companies_tab:
     filtered_companies = filter_company_exposure(report["company_exposure"], company_search)
