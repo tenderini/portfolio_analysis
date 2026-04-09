@@ -46,6 +46,7 @@ class FakeStreamlit(types.ModuleType):
         self.plotly_chart_calls: list[dict] = []
         self.bar_titles: list[str | None] = []
         self.bar_figures: list["FakeFigure"] = []
+        self.session_state: dict = {}
         self.column_config = FakeColumnConfig()
         self.sidebar = self._Sidebar(self)
 
@@ -79,6 +80,12 @@ class FakeStreamlit(types.ModuleType):
     def error(self, *args, **kwargs):
         return None
 
+    def warning(self, *args, **kwargs):
+        return None
+
+    def success(self, *args, **kwargs):
+        return None
+
     def stop(self):
         raise RuntimeError("streamlit stop called unexpectedly")
 
@@ -89,6 +96,9 @@ class FakeStreamlit(types.ModuleType):
         return None
 
     def caption(self, *args, **kwargs):
+        return None
+
+    def write(self, *args, **kwargs):
         return None
 
     def dataframe(self, data=None, *args, **kwargs):
@@ -121,9 +131,13 @@ class FakeStreamlit(types.ModuleType):
         self.control_labels.append(label)
         return value if value is not None else list(options)[0]
 
-    def text_input(self, label, placeholder=None):
+    def text_input(self, label, value="", placeholder=None, **kwargs):
         self.control_labels.append(label)
-        return ""
+        return value
+
+    def number_input(self, label, value=0.0, **kwargs):
+        self.control_labels.append(label)
+        return value
 
     def button(self, label, **kwargs):
         self.control_labels.append(label)
@@ -265,12 +279,56 @@ def build_fake_report() -> dict:
     }
 
 
+def build_fake_combined_holdings() -> pd.DataFrame:
+    return pd.DataFrame(
+        [
+            {
+                "company": "Apple",
+                "country": "US",
+                "sector": "Technology",
+                "asset_class": "Equity",
+                "holding_type": "security",
+                "is_cash_equivalent": False,
+                "weight_pct": 5.0,
+                "pie_weight": 0.78,
+                "contribution_pct": 3.9,
+                "parent_etf": "SWDA",
+            },
+            {
+                "company": "Tencent",
+                "country": "China",
+                "sector": "Communication",
+                "asset_class": "Equity",
+                "holding_type": "security",
+                "is_cash_equivalent": False,
+                "weight_pct": 6.0,
+                "pie_weight": 0.12,
+                "contribution_pct": 0.72,
+                "parent_etf": "EMIM",
+            },
+            {
+                "company": "Small Cap Co",
+                "country": "Japan",
+                "sector": "Industrials",
+                "asset_class": "Equity",
+                "holding_type": "security",
+                "is_cash_equivalent": False,
+                "weight_pct": 2.0,
+                "pie_weight": 0.10,
+                "contribution_pct": 0.2,
+                "parent_etf": "WSML",
+            },
+        ]
+    )
+
+
 class AppLayoutTests(unittest.TestCase):
     def load_app(
         self,
         *,
         fake_metrics=None,
         fake_config=None,
+        fake_custom_portfolios=None,
     ) -> FakeStreamlit:
         fake_streamlit = FakeStreamlit()
         fake_theme = types.SimpleNamespace(
@@ -299,6 +357,7 @@ class AppLayoutTests(unittest.TestCase):
         )
         fake_portfolio = types.SimpleNamespace(
             build_report=lambda snapshot_date=None: build_fake_report(),
+            build_report_from_holdings=lambda combined_holdings, snapshot_label, files=None, source_exposures=None, etf_descriptions=None: build_fake_report(),
             filter_company_exposure=lambda df, search_text="": df,
             format_snapshot_date=lambda snapshot_date: snapshot_date,
             get_company_drilldown=lambda df, company: df,
@@ -307,6 +366,53 @@ class AppLayoutTests(unittest.TestCase):
                 "top_companies": company_drivers,
             },
             list_available_snapshot_dates=lambda: ["20260408", "20260314"],
+        )
+        fake_custom_portfolios = fake_custom_portfolios or types.SimpleNamespace(
+            DEFAULT_PORTFOLIO_NAME="PIE Default",
+            load_saved_portfolios=lambda data_dir=None: [
+                {
+                    "name": "PIE Default",
+                    "entries": [
+                        {"identifier": "SWDA", "weight_pct": 78.0},
+                        {"identifier": "EMIM", "weight_pct": 12.0},
+                        {"identifier": "WSML", "weight_pct": 10.0},
+                    ],
+                }
+            ],
+            save_saved_portfolios=lambda portfolios, data_dir=None: None,
+            resolve_portfolio_entries=lambda entries: [
+                {
+                    "identifier": "SWDA",
+                    "symbol": "SWDA",
+                    "isin": "IE00B4L5Y983",
+                    "display_name": "iShares Core MSCI World UCITS ETF",
+                    "weight_pct": 78.0,
+                    "error": "",
+                },
+                {
+                    "identifier": "EMIM",
+                    "symbol": "EMIM",
+                    "isin": "IE00BKM4GZ66",
+                    "display_name": "iShares Core MSCI Emerging Markets IMI UCITS ETF",
+                    "weight_pct": 12.0,
+                    "error": "",
+                },
+                {
+                    "identifier": "WSML",
+                    "symbol": "WSML",
+                    "isin": "IE00BF4RFH31",
+                    "display_name": "iShares MSCI World Small Cap UCITS ETF",
+                    "weight_pct": 10.0,
+                    "error": "",
+                },
+            ],
+            validate_portfolio_entries=lambda entries: {"is_valid": True, "errors": [], "total_weight_pct": 100.0},
+            build_combined_holdings_for_portfolio=lambda entries, data_dir=None: {
+                "combined_holdings": build_fake_combined_holdings(),
+                "snapshot_label": "Apr 8, 2026",
+                "etf_descriptions": build_fake_report()["etf_descriptions"],
+            },
+            refresh_supported_etf_snapshot=lambda entry, data_dir=None: None,
         )
 
         def fake_bar(*args, **kwargs):
@@ -329,6 +435,7 @@ class AppLayoutTests(unittest.TestCase):
                 "src.portfolio_analysis_app.app_theme",
                 "src.portfolio_analysis_app.dashboard_metrics",
                 "src.portfolio_analysis_app.portfolio_analysis",
+                "src.portfolio_analysis_app.custom_portfolios",
                 "plotly",
                 "plotly.express",
             ]
@@ -339,6 +446,7 @@ class AppLayoutTests(unittest.TestCase):
         sys.modules["src.portfolio_analysis_app.app_theme"] = fake_theme
         sys.modules["src.portfolio_analysis_app.dashboard_metrics"] = fake_metrics
         sys.modules["src.portfolio_analysis_app.portfolio_analysis"] = fake_portfolio
+        sys.modules["src.portfolio_analysis_app.custom_portfolios"] = fake_custom_portfolios
         sys.modules["plotly"] = fake_plotly
         sys.modules["plotly.express"] = fake_plotly_express
 
@@ -368,6 +476,16 @@ class AppLayoutTests(unittest.TestCase):
             fake_streamlit.tab_labels,
         )
         self.assertIn(["Countries", "Continents"], fake_streamlit.tab_labels)
+
+    def test_app_renders_portfolio_builder_for_saved_portfolios(self) -> None:
+        fake_streamlit = self.load_app()
+
+        self.assertIn("Saved portfolio", fake_streamlit.control_labels)
+        self.assertIn("Portfolio name", fake_streamlit.control_labels)
+        self.assertIn("ETF 1", fake_streamlit.control_labels)
+        self.assertIn("Weight 1", fake_streamlit.control_labels)
+        self.assertIn("Add ETF", fake_streamlit.control_labels)
+        self.assertIn("Save portfolio", fake_streamlit.control_labels)
 
     def test_app_hides_portfolio_total_metric_by_default(self) -> None:
         fake_metrics = types.SimpleNamespace(
