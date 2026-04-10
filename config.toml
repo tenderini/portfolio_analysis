@@ -6,3 +6,7 @@ top_n = 20
 page_title = "PIE ETF Exposure Explorer"
 dashboard_title = "PIE ETF Exposure Explorer"
 snapshot_description_template = "Snapshot <strong>{snapshot_date}</strong> with drilldowns across companies, countries, sectors, and cross-ETF overlap."
+
+[catalog]
+# Set to "unlimited" to remove the cap, or use a positive integer to restore one later.
+discovery_candidate_limit = 10

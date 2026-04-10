@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -231,14 +232,60 @@ class CashEquivalentClassificationTests(unittest.TestCase):
 
 class CustomPortfolioReportTests(unittest.TestCase):
     def test_build_report_from_holdings_supports_custom_saved_portfolios(self) -> None:
-        entries = resolve_portfolio_entries(
-            [
-                {"etf_id": "ishares-swda-ie00b4l5y983", "weight_pct": 78.0},
-                {"etf_id": "ishares-emim-ie00bkm4gz66", "weight_pct": 12.0},
-                {"etf_id": "ishares-wsml-ie00bf4rfh31", "weight_pct": 10.0},
-            ]
-        )
-        portfolio_inputs = build_combined_holdings_for_portfolio(entries, data_dir="data")
+        catalog = [
+            {
+                "etf_id": "ishares-swda-ie00b4l5y983",
+                "issuer_key": "ishares",
+                "symbol": "SWDA",
+                "isin": "IE00B4L5Y983",
+                "display_name": "iShares Core MSCI World UCITS ETF",
+                "asset_class": "Equity",
+                "product_url": "https://example.test/swda",
+                "holdings_url": "https://example.test/swda.csv",
+                "search_text": "swda ie00b4l5y983 ishares core msci world ucits etf",
+                "support_status": "supported",
+                "support_reason_code": "",
+                "support_error_detail": "",
+            },
+            {
+                "etf_id": "ishares-emim-ie00bkm4gz66",
+                "issuer_key": "ishares",
+                "symbol": "EMIM",
+                "isin": "IE00BKM4GZ66",
+                "display_name": "iShares Core MSCI Emerging Markets IMI UCITS ETF",
+                "asset_class": "Equity",
+                "product_url": "https://example.test/emim",
+                "holdings_url": "https://example.test/emim.csv",
+                "search_text": "emim ie00bkm4gz66 ishares core msci emerging markets imi ucits etf",
+                "support_status": "supported",
+                "support_reason_code": "",
+                "support_error_detail": "",
+            },
+            {
+                "etf_id": "ishares-wsml-ie00bf4rfh31",
+                "issuer_key": "ishares",
+                "symbol": "WSML",
+                "isin": "IE00BF4RFH31",
+                "display_name": "iShares MSCI World Small Cap UCITS ETF",
+                "asset_class": "Equity",
+                "product_url": "https://example.test/wsml",
+                "holdings_url": "https://example.test/wsml.csv",
+                "search_text": "wsml ie00bf4rfh31 ishares msci world small cap ucits etf",
+                "support_status": "supported",
+                "support_reason_code": "",
+                "support_error_detail": "",
+            },
+        ]
+
+        with patch("src.portfolio_analysis_app.custom_portfolios.load_etf_catalog", return_value=catalog):
+            entries = resolve_portfolio_entries(
+                [
+                    {"etf_id": "ishares-swda-ie00b4l5y983", "weight_pct": 78.0},
+                    {"etf_id": "ishares-emim-ie00bkm4gz66", "weight_pct": 12.0},
+                    {"etf_id": "ishares-wsml-ie00bf4rfh31", "weight_pct": 10.0},
+                ]
+            )
+            portfolio_inputs = build_combined_holdings_for_portfolio(entries, data_dir="data")
 
         report = build_report_from_holdings(
             combined_holdings=portfolio_inputs["combined_holdings"],

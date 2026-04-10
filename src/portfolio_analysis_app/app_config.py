@@ -27,9 +27,15 @@ class ContentConfig:
 
 
 @dataclass(frozen=True)
+class CatalogConfig:
+    discovery_candidate_limit: int | None = 10
+
+
+@dataclass(frozen=True)
 class AppConfig:
     ui: UIConfig = field(default_factory=UIConfig)
     content: ContentConfig = field(default_factory=ContentConfig)
+    catalog: CatalogConfig = field(default_factory=CatalogConfig)
 
 
 DEFAULT_CONFIG = AppConfig()
@@ -44,6 +50,7 @@ def load_app_config(path: Path | None = None) -> AppConfig:
     loaded = _load_toml(config_path.read_text(encoding="utf-8"))
     ui = _read_table(loaded, "ui")
     content = _read_table(loaded, "content")
+    catalog = _read_table(loaded, "catalog")
 
     return AppConfig(
         ui=replace(
@@ -67,6 +74,16 @@ def load_app_config(path: Path | None = None) -> AppConfig:
                     "snapshot_description_template",
                     DEFAULT_CONFIG.content.snapshot_description_template,
                 )
+            ),
+        ),
+        catalog=replace(
+            DEFAULT_CONFIG.catalog,
+            discovery_candidate_limit=_read_optional_int(
+                catalog.get(
+                    "discovery_candidate_limit",
+                    DEFAULT_CONFIG.catalog.discovery_candidate_limit,
+                ),
+                DEFAULT_CONFIG.catalog.discovery_candidate_limit,
             ),
         ),
     )
@@ -117,3 +134,22 @@ def _parse_toml_value(value: str) -> Any:
         return int(value)
     except ValueError:
         return value
+
+
+def _read_optional_int(value: Any, default: int | None) -> int | None:
+    if value is None:
+        return default
+    if isinstance(value, int):
+        return None if value <= 0 else value
+
+    text = str(value).strip().casefold()
+    if not text:
+        return default
+    if text in {"unlimited", "none", "null"}:
+        return None
+
+    try:
+        parsed = int(text)
+    except ValueError:
+        return default
+    return None if parsed <= 0 else parsed

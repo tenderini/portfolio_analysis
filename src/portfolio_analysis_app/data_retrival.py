@@ -35,6 +35,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Tuple, Optional
+from urllib.parse import urljoin
 
 import pandas as pd
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
@@ -230,7 +231,7 @@ def extract_holdings_csv_url(product_page_url: str, rendered_html: str) -> str:
         if c.startswith("http"):
             abs_candidates.append(c)
         else:
-            abs_candidates.append(product_page_url.rstrip("/") + c if c.startswith("/") else product_page_url.rstrip("/") + "/" + c)
+            abs_candidates.append(urljoin(product_page_url, c))
 
     # Rank candidates: prefer those whose query includes holdings
     def score(u: str) -> int:

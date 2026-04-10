@@ -34,6 +34,29 @@ class SavedPortfolioTests(unittest.TestCase):
         entry.update(overrides)
         return entry
 
+    def _baseline_catalog(self) -> list[dict[str, object]]:
+        return [
+            self._catalog_entry(),
+            self._catalog_entry(
+                etf_id="ishares-emim-ie00bkm4gz66",
+                symbol="EMIM",
+                isin="IE00BKM4GZ66",
+                display_name="iShares Core MSCI Emerging Markets IMI UCITS ETF",
+                product_url="https://example.test/emim",
+                holdings_url="https://example.test/emim.csv",
+                search_text="emim ie00bkm4gz66 ishares core msci emerging markets imi ucits etf",
+            ),
+            self._catalog_entry(
+                etf_id="ishares-wsml-ie00bf4rfh31",
+                symbol="WSML",
+                isin="IE00BF4RFH31",
+                display_name="iShares MSCI World Small Cap UCITS ETF",
+                product_url="https://example.test/wsml",
+                holdings_url="https://example.test/wsml.csv",
+                search_text="wsml ie00bf4rfh31 ishares msci world small cap ucits etf",
+            ),
+        ]
+
     def test_load_saved_portfolios_returns_default_portfolio_when_file_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             portfolios = load_saved_portfolios(Path(tmpdir))
@@ -66,7 +89,11 @@ class SavedPortfolioTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            portfolios = load_saved_portfolios(data_dir)
+            with patch(
+                "src.portfolio_analysis_app.custom_portfolios.load_etf_catalog",
+                return_value=self._baseline_catalog(),
+            ):
+                portfolios = load_saved_portfolios(data_dir)
 
         self.assertEqual(
             [entry["etf_id"] for entry in portfolios[0]["entries"]],
@@ -112,12 +139,16 @@ class SavedPortfolioTests(unittest.TestCase):
         self.assertTrue(any("100.00%" in error for error in validation["errors"]))
 
     def test_resolve_portfolio_entries_reads_catalog_entries_by_etf_id(self) -> None:
-        resolved = resolve_portfolio_entries(
-            [
-                {"etf_id": "ishares-swda-ie00b4l5y983", "weight_pct": 78.0},
-                {"etf_id": "ishares-emim-ie00bkm4gz66", "weight_pct": 12.0},
-            ]
-        )
+        with patch(
+            "src.portfolio_analysis_app.custom_portfolios.load_etf_catalog",
+            return_value=self._baseline_catalog(),
+        ):
+            resolved = resolve_portfolio_entries(
+                [
+                    {"etf_id": "ishares-swda-ie00b4l5y983", "weight_pct": 78.0},
+                    {"etf_id": "ishares-emim-ie00bkm4gz66", "weight_pct": 12.0},
+                ]
+            )
 
         self.assertEqual([entry["symbol"] for entry in resolved], ["SWDA", "EMIM"])
         self.assertEqual([entry["isin"] for entry in resolved], ["IE00B4L5Y983", "IE00BKM4GZ66"])
@@ -156,15 +187,18 @@ class SavedPortfolioTests(unittest.TestCase):
         self.assertEqual(validation["total_weight_pct"], 100.0)
 
     def test_build_combined_holdings_for_portfolio_uses_latest_cached_holdings(self) -> None:
-        entries = resolve_portfolio_entries(
-            [
-                {"etf_id": "ishares-swda-ie00b4l5y983", "weight_pct": 78.0},
-                {"etf_id": "ishares-emim-ie00bkm4gz66", "weight_pct": 12.0},
-                {"etf_id": "ishares-wsml-ie00bf4rfh31", "weight_pct": 10.0},
-            ]
-        )
-
-        result = build_combined_holdings_for_portfolio(entries, data_dir=Path("data"))
+        with patch(
+            "src.portfolio_analysis_app.custom_portfolios.load_etf_catalog",
+            return_value=self._baseline_catalog(),
+        ):
+            entries = resolve_portfolio_entries(
+                [
+                    {"etf_id": "ishares-swda-ie00b4l5y983", "weight_pct": 78.0},
+                    {"etf_id": "ishares-emim-ie00bkm4gz66", "weight_pct": 12.0},
+                    {"etf_id": "ishares-wsml-ie00bf4rfh31", "weight_pct": 10.0},
+                ]
+            )
+            result = build_combined_holdings_for_portfolio(entries, data_dir=Path("data"))
 
         self.assertEqual(result["snapshot_label"], "Apr 8, 2026")
         self.assertEqual(set(result["combined_holdings"]["parent_etf"]), {"SWDA", "EMIM", "WSML"})
