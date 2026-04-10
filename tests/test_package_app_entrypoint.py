@@ -142,6 +142,10 @@ class PackageAppEntrypointTests(unittest.TestCase):
             lambda entries, data_dir=None: {"combined_holdings": {}, "snapshot_label": "", "etf_descriptions": []}
         )
         fake_custom_portfolios.refresh_supported_etf_snapshot = lambda entry, data_dir=None: None
+        fake_etf_catalog = types.ModuleType("src.portfolio_analysis_app.etf_catalog")
+        fake_etf_catalog.load_etf_catalog = lambda catalog_path=None: []
+        fake_etf_catalog.search_etf_catalog = lambda query, catalog=None, limit=20: []
+        fake_etf_catalog.build_catalog_dataframe = lambda catalog=None, data_dir=None: {}
         fake_plotly = types.ModuleType("plotly")
         fake_plotly_express = types.ModuleType("plotly.express")
 
@@ -159,6 +163,7 @@ class PackageAppEntrypointTests(unittest.TestCase):
                 "src.portfolio_analysis_app.dashboard_metrics",
                 "src.portfolio_analysis_app.portfolio_analysis",
                 "src.portfolio_analysis_app.custom_portfolios",
+                "src.portfolio_analysis_app.etf_catalog",
             ]
         }
         sys.modules["pandas"] = fake_pandas
@@ -172,6 +177,7 @@ class PackageAppEntrypointTests(unittest.TestCase):
         sys.modules["src.portfolio_analysis_app.dashboard_metrics"] = fake_metrics
         sys.modules["src.portfolio_analysis_app.portfolio_analysis"] = fake_portfolio
         sys.modules["src.portfolio_analysis_app.custom_portfolios"] = fake_custom_portfolios
+        sys.modules["src.portfolio_analysis_app.etf_catalog"] = fake_etf_catalog
 
         try:
             with self.assertRaises(StopCalled):

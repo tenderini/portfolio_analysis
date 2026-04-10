@@ -389,6 +389,31 @@ def validate_holdings_capture(raw_df: pd.DataFrame, holdings: pd.DataFrame) -> H
 # Analytics + persistence
 # -----------------------
 
+def fetch_standardised_holdings_snapshot(
+    symbol: str,
+    isin: str,
+    product_page: str,
+    pie_weight: float = 0.0,
+) -> Tuple[pd.DataFrame, HoldingsValidation, str]:
+    etf = ETF(symbol=symbol, isin=isin, product_page=product_page, pie_weight=pie_weight)
+    html, request_context, context, browser, playwright_instance = fetch_rendered_html_and_request_ctx(
+        etf.product_page
+    )
+    try:
+        csv_url = extract_holdings_csv_url(etf.product_page, html)
+        csv_text = download_csv_via_playwright(
+            request_context,
+            csv_url,
+            referer=etf.product_page,
+        )
+        raw_df = parse_holdings_csv(csv_text)
+        holdings = standardise_holdings(raw_df)
+        validation = validate_holdings_capture(raw_df, holdings)
+        return holdings, validation, csv_url
+    finally:
+        close_playwright(context, browser, playwright_instance)
+
+
 def save_raw_csv_output(etf: ETF, csv_text: str) -> str:
     raw_path = os.path.join(DATA_DIR, f"{etf.symbol}_{TODAY}_raw_holdings.csv")
     with open(raw_path, "w", encoding="utf-8", newline="") as f:

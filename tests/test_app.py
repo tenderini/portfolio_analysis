@@ -329,6 +329,8 @@ class AppLayoutTests(unittest.TestCase):
         fake_metrics=None,
         fake_config=None,
         fake_custom_portfolios=None,
+        fake_etf_catalog=None,
+        allow_stop: bool = False,
     ) -> FakeStreamlit:
         fake_streamlit = FakeStreamlit()
         fake_theme = types.SimpleNamespace(
@@ -373,35 +375,62 @@ class AppLayoutTests(unittest.TestCase):
                 {
                     "name": "PIE Default",
                     "entries": [
-                        {"identifier": "SWDA", "weight_pct": 78.0},
-                        {"identifier": "EMIM", "weight_pct": 12.0},
-                        {"identifier": "WSML", "weight_pct": 10.0},
+                        {
+                            "etf_id": "ishares-swda-ie00b4l5y983",
+                            "weight_pct": 78.0,
+                            "search_text": "SWDA",
+                        },
+                        {
+                            "etf_id": "ishares-emim-ie00bkm4gz66",
+                            "weight_pct": 12.0,
+                            "search_text": "EMIM",
+                        },
+                        {
+                            "etf_id": "ishares-wsml-ie00bf4rfh31",
+                            "weight_pct": 10.0,
+                            "search_text": "WSML",
+                        },
                     ],
                 }
             ],
             save_saved_portfolios=lambda portfolios, data_dir=None: None,
             resolve_portfolio_entries=lambda entries: [
                 {
-                    "identifier": "SWDA",
+                    "etf_id": "ishares-swda-ie00b4l5y983",
+                    "search_text": "SWDA",
                     "symbol": "SWDA",
                     "isin": "IE00B4L5Y983",
                     "display_name": "iShares Core MSCI World UCITS ETF",
+                    "product_page": "https://example.test/swda",
+                    "holdings_url": "https://example.test/swda.csv",
+                    "issuer": "ishares",
+                    "is_supported": True,
                     "weight_pct": 78.0,
                     "error": "",
                 },
                 {
-                    "identifier": "EMIM",
+                    "etf_id": "ishares-emim-ie00bkm4gz66",
+                    "search_text": "EMIM",
                     "symbol": "EMIM",
                     "isin": "IE00BKM4GZ66",
                     "display_name": "iShares Core MSCI Emerging Markets IMI UCITS ETF",
+                    "product_page": "https://example.test/emim",
+                    "holdings_url": "https://example.test/emim.csv",
+                    "issuer": "ishares",
+                    "is_supported": True,
                     "weight_pct": 12.0,
                     "error": "",
                 },
                 {
-                    "identifier": "WSML",
+                    "etf_id": "ishares-wsml-ie00bf4rfh31",
+                    "search_text": "WSML",
                     "symbol": "WSML",
                     "isin": "IE00BF4RFH31",
                     "display_name": "iShares MSCI World Small Cap UCITS ETF",
+                    "product_page": "https://example.test/wsml",
+                    "holdings_url": "https://example.test/wsml.csv",
+                    "issuer": "ishares",
+                    "is_supported": True,
                     "weight_pct": 10.0,
                     "error": "",
                 },
@@ -413,6 +442,42 @@ class AppLayoutTests(unittest.TestCase):
                 "etf_descriptions": build_fake_report()["etf_descriptions"],
             },
             refresh_supported_etf_snapshot=lambda entry, data_dir=None: None,
+        )
+        fake_etf_catalog = fake_etf_catalog or types.SimpleNamespace(
+            load_etf_catalog=lambda catalog_path=None: [
+                {
+                    "etf_id": "ishares-swda-ie00b4l5y983",
+                    "symbol": "SWDA",
+                    "isin": "IE00B4L5Y983",
+                    "display_name": "iShares Core MSCI World UCITS ETF",
+                    "asset_class": "Equity",
+                    "product_url": "https://example.test/swda",
+                    "holdings_url": "https://example.test/swda.csv",
+                    "search_text": "swda ie00b4l5y983 ishares core msci world ucits etf",
+                },
+                {
+                    "etf_id": "ishares-emim-ie00bkm4gz66",
+                    "symbol": "EMIM",
+                    "isin": "IE00BKM4GZ66",
+                    "display_name": "iShares Core MSCI Emerging Markets IMI UCITS ETF",
+                    "asset_class": "Equity",
+                    "product_url": "https://example.test/emim",
+                    "holdings_url": "https://example.test/emim.csv",
+                    "search_text": "emim ie00bkm4gz66 ishares core msci emerging markets imi ucits etf",
+                },
+            ],
+            search_etf_catalog=lambda query, catalog=None, limit=20: (catalog or [])[:limit],
+            build_catalog_dataframe=lambda catalog=None, data_dir=None: pd.DataFrame(
+                [
+                    {
+                        "symbol": "SWDA",
+                        "isin": "IE00B4L5Y983",
+                        "display_name": "iShares Core MSCI World UCITS ETF",
+                        "asset_class": "Equity",
+                        "cached_snapshot": "Apr 8, 2026",
+                    }
+                ]
+            ),
         )
 
         def fake_bar(*args, **kwargs):
@@ -436,6 +501,7 @@ class AppLayoutTests(unittest.TestCase):
                 "src.portfolio_analysis_app.dashboard_metrics",
                 "src.portfolio_analysis_app.portfolio_analysis",
                 "src.portfolio_analysis_app.custom_portfolios",
+                "src.portfolio_analysis_app.etf_catalog",
                 "plotly",
                 "plotly.express",
             ]
@@ -447,6 +513,7 @@ class AppLayoutTests(unittest.TestCase):
         sys.modules["src.portfolio_analysis_app.dashboard_metrics"] = fake_metrics
         sys.modules["src.portfolio_analysis_app.portfolio_analysis"] = fake_portfolio
         sys.modules["src.portfolio_analysis_app.custom_portfolios"] = fake_custom_portfolios
+        sys.modules["src.portfolio_analysis_app.etf_catalog"] = fake_etf_catalog
         sys.modules["plotly"] = fake_plotly
         sys.modules["plotly.express"] = fake_plotly_express
 
@@ -454,7 +521,11 @@ class AppLayoutTests(unittest.TestCase):
             spec = importlib.util.spec_from_file_location("test_app_module", Path("app.py"))
             module = importlib.util.module_from_spec(spec)
             assert spec.loader is not None
-            spec.loader.exec_module(module)
+            try:
+                spec.loader.exec_module(module)
+            except RuntimeError as exc:
+                if not allow_stop or str(exc) != "streamlit stop called unexpectedly":
+                    raise
         finally:
             for name, previous_module in previous_modules.items():
                 if previous_module is None:
@@ -472,20 +543,63 @@ class AppLayoutTests(unittest.TestCase):
         self.assertNotIn("Search companies", fake_streamlit.control_labels)
         self.assertNotIn("Refresh analysis", fake_streamlit.control_labels)
         self.assertIn(
-            ["Overview", "Companies", "Countries/Continents", "Sectors", "Overlap", "Single ETF Analysis"],
+            ["Overview", "Companies", "Countries/Continents", "Sectors", "Overlap", "Single ETF Analysis", "ETF Catalogue"],
             fake_streamlit.tab_labels,
         )
         self.assertIn(["Countries", "Continents"], fake_streamlit.tab_labels)
 
-    def test_app_renders_portfolio_builder_for_saved_portfolios(self) -> None:
+    def test_app_renders_catalogue_builder_controls(self) -> None:
         fake_streamlit = self.load_app()
 
         self.assertIn("Saved portfolio", fake_streamlit.control_labels)
         self.assertIn("Portfolio name", fake_streamlit.control_labels)
-        self.assertIn("ETF 1", fake_streamlit.control_labels)
+        self.assertIn("Search ETF 1", fake_streamlit.control_labels)
+        self.assertIn("Match 1", fake_streamlit.control_labels)
         self.assertIn("Weight 1", fake_streamlit.control_labels)
+        self.assertIn("Catalogue search", fake_streamlit.control_labels)
         self.assertIn("Add ETF", fake_streamlit.control_labels)
         self.assertIn("Save portfolio", fake_streamlit.control_labels)
+
+    def test_app_blocks_analysis_when_saved_portfolio_references_missing_catalog_entry(self) -> None:
+        fake_streamlit = self.load_app(
+            fake_custom_portfolios=types.SimpleNamespace(
+                DEFAULT_PORTFOLIO_NAME="Broken",
+                load_saved_portfolios=lambda data_dir=None: [
+                    {
+                        "name": "Broken",
+                        "entries": [
+                            {"etf_id": "missing-id", "weight_pct": 100.0, "search_text": "Missing ETF"}
+                        ],
+                    }
+                ],
+                save_saved_portfolios=lambda portfolios, data_dir=None: None,
+                resolve_portfolio_entries=lambda entries: [
+                    {
+                        "etf_id": "missing-id",
+                        "search_text": "Missing ETF",
+                        "weight_pct": 100.0,
+                        "symbol": "",
+                        "isin": "",
+                        "display_name": "",
+                        "product_page": "",
+                        "holdings_url": "",
+                        "issuer": "",
+                        "is_supported": False,
+                        "error": 'Unsupported ETF ID: "missing-id"',
+                    }
+                ],
+                validate_portfolio_entries=lambda entries: {
+                    "is_valid": False,
+                    "errors": ['Unsupported ETF ID: "missing-id"'],
+                    "total_weight_pct": 100.0,
+                },
+                build_combined_holdings_for_portfolio=lambda entries, data_dir=None: None,
+                refresh_supported_etf_snapshot=lambda entry, data_dir=None: None,
+            ),
+            allow_stop=True,
+        )
+
+        self.assertTrue(any("missing-id" in body for body in fake_streamlit.markdown_calls))
 
     def test_app_hides_portfolio_total_metric_by_default(self) -> None:
         fake_metrics = types.SimpleNamespace(

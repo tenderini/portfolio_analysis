@@ -33,6 +33,11 @@ if __package__ in {None, ""}:
         save_saved_portfolios,
         validate_portfolio_entries,
     )
+    from src.portfolio_analysis_app.etf_catalog import (
+        build_catalog_dataframe,
+        load_etf_catalog,
+        search_etf_catalog,
+    )
     from src.portfolio_analysis_app.portfolio_analysis import (
         build_report_from_holdings,
         filter_company_exposure,
@@ -59,6 +64,11 @@ else:
         resolve_portfolio_entries,
         save_saved_portfolios,
         validate_portfolio_entries,
+    )
+    from .etf_catalog import (
+        build_catalog_dataframe,
+        load_etf_catalog,
+        search_etf_catalog,
     )
     from .portfolio_analysis import (
         build_report_from_holdings,
@@ -294,14 +304,15 @@ def render_cash_equivalent_table(df: pd.DataFrame, height: int = 320) -> None:
 
 def _normalise_portfolio_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not entries:
-        return [{"identifier": "", "weight_pct": 0.0}]
+        return [{"etf_id": "", "weight_pct": 0.0, "search_text": ""}]
 
     normalised_entries = []
     for entry in entries:
         normalised_entries.append(
             {
-                "identifier": str(entry.get("identifier", "")),
+                "etf_id": str(entry.get("etf_id", "")),
                 "weight_pct": float(entry.get("weight_pct", 0.0) or 0.0),
+                "search_text": str(entry.get("search_text", "")),
             }
         )
     return normalised_entries
@@ -344,7 +355,48 @@ def _upsert_saved_portfolio(
     return updated_portfolios
 
 
-def _render_portfolio_builder(saved_portfolios: list[dict[str, Any]]) -> dict[str, Any]:
+def _render_catalogue_match_picker(
+    row_index: int,
+    entry: dict[str, Any],
+    catalog: list[dict[str, Any]],
+) -> dict[str, Any]:
+    search_text = st.text_input(
+        f"Search ETF {row_index}",
+        value=str(entry.get("search_text", "")),
+    )
+    matches = search_etf_catalog(search_text, catalog)
+    labels = ["Select ETF..."] + [
+        f'{match["symbol"]} · {match["isin"]} · {match["display_name"]}'
+        for match in matches
+    ]
+    label_to_id = {"Select ETF...": ""}
+    label_to_id.update(
+        {
+            f'{match["symbol"]} · {match["isin"]} · {match["display_name"]}': match["etf_id"]
+            for match in matches
+        }
+    )
+    current_id = str(entry.get("etf_id", ""))
+    current_label = next(
+        (label for label, etf_id in label_to_id.items() if etf_id == current_id),
+        labels[0],
+    )
+    selected_label = st.selectbox(
+        f"Match {row_index}",
+        options=labels,
+        index=labels.index(current_label),
+    )
+    return {
+        "etf_id": label_to_id[selected_label],
+        "weight_pct": float(entry.get("weight_pct", 0.0) or 0.0),
+        "search_text": search_text,
+    }
+
+
+def _render_portfolio_builder(
+    saved_portfolios: list[dict[str, Any]],
+    catalog: list[dict[str, Any]],
+) -> dict[str, Any]:
     if not saved_portfolios:
         st.error("No saved portfolios are available.")
         st.stop()
@@ -376,14 +428,14 @@ def _render_portfolio_builder(saved_portfolios: list[dict[str, Any]]) -> dict[st
             list(st.session_state.get("portfolio_editor_entries", []))
         )
         if st.button("Add ETF"):
-            editor_entries.append({"identifier": "", "weight_pct": 0.0})
+            editor_entries.append({"etf_id": "", "weight_pct": 0.0, "search_text": ""})
 
         rendered_entries: list[dict[str, Any]] = []
         remove_index: int | None = None
         for index, entry in enumerate(editor_entries, start=1):
-            row_columns = st.columns([1.6, 1.0, 0.8])
+            row_columns = st.columns([1.7, 1.6, 1.0, 0.8])
             with row_columns[0]:
-                identifier = st.text_input(f"ETF {index}", value=str(entry.get("identifier", "")))
+                rendered_entry = _render_catalogue_match_picker(index, entry, catalog)
             with row_columns[1]:
                 weight_pct = st.number_input(
                     f"Weight {index}",
@@ -395,7 +447,8 @@ def _render_portfolio_builder(saved_portfolios: list[dict[str, Any]]) -> dict[st
             with row_columns[2]:
                 if len(editor_entries) > 1 and st.button(f"Remove ETF {index}"):
                     remove_index = index - 1
-            rendered_entries.append({"identifier": identifier, "weight_pct": weight_pct})
+            rendered_entry["weight_pct"] = weight_pct
+            rendered_entries.append(rendered_entry)
 
         if remove_index is not None:
             rendered_entries.pop(remove_index)
@@ -429,11 +482,13 @@ def _render_portfolio_builder(saved_portfolios: list[dict[str, Any]]) -> dict[st
         validation = validate_portfolio_entries(st.session_state["portfolio_editor_entries"])
 
         for entry in resolved_entries:
-            identifier = str(entry.get("identifier", "")).strip()
-            if not identifier:
+            etf_id = str(entry.get("etf_id", "")).strip()
+            search_text = str(entry.get("search_text", "")).strip()
+            if not etf_id and not search_text:
                 continue
             if entry.get("error"):
-                st.markdown(f'Invalid ETF: `{escape(identifier)}`. {escape(str(entry["error"]))}')
+                label = search_text or etf_id
+                st.markdown(f'Invalid ETF: `{escape(label)}`. {escape(str(entry["error"]))}')
                 continue
 
             st.markdown(
@@ -465,8 +520,9 @@ def main() -> None:
     st.markdown(build_theme_css(), unsafe_allow_html=True)
     top_n = app_config.ui.top_n
     company_search = ""
+    catalog = load_etf_catalog()
     saved_portfolios = load_saved_portfolios()
-    builder_state = _render_portfolio_builder(saved_portfolios)
+    builder_state = _render_portfolio_builder(saved_portfolios, catalog)
 
     if not builder_state["validation"]["is_valid"]:
         for error in builder_state["validation"]["errors"]:
@@ -506,8 +562,8 @@ def main() -> None:
     for column, metric in zip(metric_columns, headline_metrics):
         column.metric(metric["label"], metric["value"])
 
-    overview_tab, companies_tab, geography_tab, sectors_tab, overlap_tab, single_etf_tab = st.tabs(
-        ["Overview", "Companies", "Countries/Continents", "Sectors", "Overlap", "Single ETF Analysis"]
+    overview_tab, companies_tab, geography_tab, sectors_tab, overlap_tab, single_etf_tab, catalogue_tab = st.tabs(
+        ["Overview", "Companies", "Countries/Continents", "Sectors", "Overlap", "Single ETF Analysis", "ETF Catalogue"]
     )
 
     with overview_tab:
@@ -728,6 +784,26 @@ def main() -> None:
                 )
             with section_cols[1]:
                 render_weight_table(section_data, label_column, height=360)
+
+    with catalogue_tab:
+        st.subheader("Supported ETF Catalogue")
+        catalogue_search = st.text_input("Catalogue search", value="")
+        catalogue_df = build_catalog_dataframe(
+            search_etf_catalog(catalogue_search, catalog),
+            data_dir=Path("data"),
+        )
+        st.dataframe(
+            catalogue_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "symbol": st.column_config.TextColumn("Ticker"),
+                "isin": st.column_config.TextColumn("ISIN"),
+                "display_name": st.column_config.TextColumn("ETF"),
+                "asset_class": st.column_config.TextColumn("Asset class"),
+                "cached_snapshot": st.column_config.TextColumn("Cached snapshot"),
+            },
+        )
 
 
 if __name__ == "__main__":

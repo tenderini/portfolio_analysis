@@ -233,9 +233,9 @@ class CustomPortfolioReportTests(unittest.TestCase):
     def test_build_report_from_holdings_supports_custom_saved_portfolios(self) -> None:
         entries = resolve_portfolio_entries(
             [
-                {"identifier": "SWDA", "weight_pct": 78.0},
-                {"identifier": "EMIM", "weight_pct": 12.0},
-                {"identifier": "WSML", "weight_pct": 10.0},
+                {"etf_id": "ishares-swda-ie00b4l5y983", "weight_pct": 78.0},
+                {"etf_id": "ishares-emim-ie00bkm4gz66", "weight_pct": 12.0},
+                {"etf_id": "ishares-wsml-ie00bf4rfh31", "weight_pct": 10.0},
             ]
         )
         portfolio_inputs = build_combined_holdings_for_portfolio(entries, data_dir="data")
