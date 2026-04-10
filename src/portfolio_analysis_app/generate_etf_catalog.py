@@ -47,7 +47,7 @@ DISCOVERY_URL_TEMPLATE = (
 )
 DISCOVERY_BASE_URL = "https://www.ishares.com"
 MAX_DISCOVERY_PAGES = 4
-DISCOVERY_CANDIDATE_LIMIT = 10
+DISCOVERY_CANDIDATE_LIMIT = None
 PRODUCT_URL_PATTERN = re.compile(
     r'(?P<product_url>(?:https?://www\.ishares\.com)?/uk/individual/en/products/[^"\'\\<>\s]+)',
     re.IGNORECASE,
@@ -283,6 +283,7 @@ def discover_ishares_candidates() -> tuple[list[dict[str, str]], bool]:
         unique_candidates = unique_candidates[:discovery_candidate_limit]
     if unique_candidates:
         LOGGER.info("Enriching %s unique ETF candidates", len(unique_candidates))
+        LOGGER.info(f"Candidates are: {unique_candidates}")
     for index, candidate in enumerate(unique_candidates, start=1):
         enrich_started_at = perf_counter()
         enriched_candidate = _enrich_candidate_identity(candidate)

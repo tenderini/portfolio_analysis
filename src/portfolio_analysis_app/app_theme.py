@@ -168,15 +168,24 @@ def build_theme_css() -> str:
       }
 
       .stButton > button {
-        background: linear-gradient(135deg, rgba(78, 205, 196, 0.95) 0%, rgba(44, 164, 160, 0.92) 100%);
-        color: #041016;
-        border: 0;
+        background: linear-gradient(180deg, rgba(23, 33, 43, 0.96) 0%, rgba(12, 22, 32, 0.98) 100%);
+        color: var(--text-primary);
+        border: 1px solid rgba(78, 205, 196, 0.28);
         font-weight: 700;
-        box-shadow: 0 12px 24px rgba(78, 205, 196, 0.2);
+        box-shadow: 0 12px 24px rgba(0, 0, 0, 0.24);
       }
 
       .stButton > button:hover {
-        filter: brightness(1.04);
+        border-color: rgba(125, 249, 238, 0.42);
+        box-shadow: 0 14px 28px rgba(78, 205, 196, 0.16);
+        filter: brightness(1.06);
+      }
+
+      .stButton > button:focus,
+      .stButton > button:focus-visible {
+        outline: none;
+        border-color: rgba(125, 249, 238, 0.58);
+        box-shadow: 0 0 0 1px rgba(125, 249, 238, 0.3), 0 14px 28px rgba(78, 205, 196, 0.16);
       }
 
       .stTextInput input,

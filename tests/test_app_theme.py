@@ -93,3 +93,15 @@ class DarkThemeTests(unittest.TestCase):
         self.assertIn(".etf-description-ticker", css)
         self.assertIn(".etf-description-role", css)
         self.assertIn(".etf-description-spacer", css)
+
+    def test_build_theme_css_styles_buttons_for_dark_surface_contrast(self) -> None:
+        css = build_theme_css()
+
+        self.assertIn(".stButton > button", css)
+        self.assertIn(
+            "background: linear-gradient(180deg, rgba(23, 33, 43, 0.96) 0%, rgba(12, 22, 32, 0.98) 100%);",
+            css,
+        )
+        self.assertIn("color: var(--text-primary);", css)
+        self.assertIn("border: 1px solid rgba(78, 205, 196, 0.28);", css)
+        self.assertIn("box-shadow: 0 12px 24px rgba(0, 0, 0, 0.24);", css)

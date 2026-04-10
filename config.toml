@@ -9,4 +9,4 @@ snapshot_description_template = "Snapshot <strong>{snapshot_date}</strong> with 
 
 [catalog]
 # Set to "unlimited" to remove the cap, or use a positive integer to restore one later.
-discovery_candidate_limit = 10
+discovery_candidate_limit = None
