@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -172,6 +173,47 @@ class GenerateEtfCatalogTests(unittest.TestCase):
         self.assertTrue(report["used_fallback"])
         self.assertEqual(report["reason_counts"]["parse_failed"], 1)
 
+    def test_load_catalog_checkpoint_returns_empty_rows_when_file_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "etf_catalog.checkpoint.json"
+
+            rows = generate_etf_catalog._load_catalog_checkpoint(checkpoint_path)
+
+        self.assertEqual(rows, [])
+
+    def test_write_catalog_checkpoint_persists_rows_deterministically(self) -> None:
+        rows = [
+            {
+                "etf_id": "ishares-alpha-ie00aaaaaa01",
+                "issuer_key": "ishares",
+                "symbol": "ALPHA",
+                "isin": "IE00AAAAAA01",
+                "display_name": "Alpha ETF",
+                "asset_class": "Equity",
+                "product_url": "https://example.test/alpha",
+                "holdings_url": "",
+                "search_text": "alpha ie00aaaaaa01 alpha etf",
+                "support_status": "unsupported",
+                "support_reason_code": "fetch_failed",
+                "support_error_detail": "timeout",
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_path = Path(tmpdir) / "etf_catalog.checkpoint.json"
+
+            generate_etf_catalog._write_catalog_checkpoint(
+                completed_rows=rows,
+                discovered_count=856,
+                checkpoint_path=checkpoint_path,
+            )
+
+            saved = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(saved["version"], 1)
+        self.assertEqual(saved["discovered_count"], 856)
+        self.assertEqual(saved["completed_rows"], rows)
+
     def test_extract_candidates_from_discovery_html_parses_etf_table_rows(self) -> None:
         html = """
         <table>
@@ -225,11 +267,6 @@ class GenerateEtfCatalogTests(unittest.TestCase):
                 "_extract_candidates_from_discovery_html",
                 side_effect=[first_page_candidates, []],
             ),
-            patch.object(
-                generate_etf_catalog,
-                "_enrich_candidate_identity",
-                side_effect=lambda candidate: {**candidate, "isin": "IE00B4L5Y983"},
-            ),
             self.assertLogs(generate_etf_catalog.__name__, level="INFO") as captured,
         ):
             candidates, used_fallback = discover_ishares_candidates()
@@ -238,13 +275,13 @@ class GenerateEtfCatalogTests(unittest.TestCase):
         self.assertEqual(len(candidates), 1)
         log_output = "\n".join(captured.output)
         self.assertIn("Discovering iShares ETF candidates", log_output)
-        self.assertIn("Fetched discovery page 1/4", log_output)
+        self.assertIn("Fetched discovery page 1/", log_output)
         self.assertIn("Page 1 yielded 1 raw candidates", log_output)
-        self.assertIn("Fetched discovery page 2/4", log_output)
+        self.assertIn("Fetched discovery page 2/", log_output)
         self.assertIn("Page 2 yielded 0 raw candidates", log_output)
-        self.assertIn("Enriching 1 unique ETF candidates", log_output)
+        self.assertIn("Discovered 1 ETF candidates", log_output)
 
-    def test_discover_ishares_candidates_stops_at_hardcoded_limit(self) -> None:
+    def test_discover_ishares_candidates_stops_at_configured_limit(self) -> None:
         many_candidates = [
             {
                 "symbol": f"ETF{i}",
@@ -266,27 +303,22 @@ class GenerateEtfCatalogTests(unittest.TestCase):
             ),
             patch.object(
                 generate_etf_catalog,
-                "_enrich_candidate_identity",
-                side_effect=lambda candidate: {**candidate, "isin": f"IE00TEST{candidate['symbol'][-4:]}"},
-            ),
-            patch.object(
-                generate_etf_catalog,
                 "get_discovery_candidate_limit",
-                return_value=generate_etf_catalog.DISCOVERY_CANDIDATE_LIMIT,
+                return_value=10,
             ),
             self.assertLogs(generate_etf_catalog.__name__, level="INFO") as captured,
         ):
             candidates, used_fallback = discover_ishares_candidates()
 
         self.assertFalse(used_fallback)
-        self.assertEqual(len(candidates), generate_etf_catalog.DISCOVERY_CANDIDATE_LIMIT)
+        self.assertEqual(len(candidates), 10)
         log_output = "\n".join(captured.output)
         self.assertIn(
-            f"Applying configured discovery limit: {generate_etf_catalog.DISCOVERY_CANDIDATE_LIMIT} ETF candidates",
+            "Applying configured discovery limit: 10 ETF candidates",
             log_output,
         )
         self.assertIn(
-            f"Reached configured discovery limit of {generate_etf_catalog.DISCOVERY_CANDIDATE_LIMIT} ETF candidates",
+            "Reached configured discovery limit of 10 ETF candidates",
             log_output,
         )
 
@@ -310,11 +342,6 @@ class GenerateEtfCatalogTests(unittest.TestCase):
                 "_extract_candidates_from_discovery_html",
                 return_value=many_candidates,
             ),
-            patch.object(
-                generate_etf_catalog,
-                "_enrich_candidate_identity",
-                side_effect=lambda candidate: {**candidate, "isin": f"IE00TEST{candidate['symbol'][-4:]}"},
-            ),
             patch.object(generate_etf_catalog, "get_discovery_candidate_limit", return_value=None),
             self.assertLogs(generate_etf_catalog.__name__, level="INFO") as captured,
         ):
@@ -325,6 +352,256 @@ class GenerateEtfCatalogTests(unittest.TestCase):
         log_output = "\n".join(captured.output)
         self.assertIn("Applying unlimited discovery candidate limit", log_output)
         self.assertNotIn("Reached configured discovery limit", log_output)
+
+    def test_discover_ishares_candidates_logs_processing_queue(self) -> None:
+        raw_candidates = [
+            {
+                "symbol": "SWDA",
+                "isin": "",
+                "display_name": "iShares Core MSCI World UCITS ETF",
+                "asset_class": "Unknown",
+                "product_url": "https://example.test/swda",
+                "holdings_url": "",
+            },
+            {
+                "symbol": "EMIM",
+                "isin": "",
+                "display_name": "iShares Core MSCI Emerging Markets IMI UCITS ETF",
+                "asset_class": "Unknown",
+                "product_url": "https://example.test/emim",
+                "holdings_url": "",
+            },
+        ]
+
+        with (
+            patch.object(generate_etf_catalog, "_fetch_discovery_html", return_value="page-1-html"),
+            patch.object(generate_etf_catalog, "_extract_candidates_from_discovery_html", return_value=raw_candidates),
+            patch.object(generate_etf_catalog, "get_discovery_candidate_limit", return_value=None),
+            self.assertLogs(generate_etf_catalog.__name__, level="INFO") as captured,
+        ):
+            discover_ishares_candidates()
+
+        log_output = "\n".join(captured.output)
+        self.assertIn("Queued 2 ETF candidates for processing", log_output)
+        self.assertIn("Queue: 1/2 SWDA - iShares Core MSCI World UCITS ETF", log_output)
+        self.assertIn("Queue: 2/2 EMIM - iShares Core MSCI Emerging Markets IMI UCITS ETF", log_output)
+
+    def test_process_catalog_candidates_skips_rows_already_in_checkpoint(self) -> None:
+        checkpoint_rows = [
+            normalise_catalog_candidate(
+                {
+                    "symbol": "SWDA",
+                    "isin": "IE00B4L5Y983",
+                    "display_name": "iShares Core MSCI World UCITS ETF",
+                    "asset_class": "Equity",
+                    "product_url": "https://example.test/swda",
+                    "holdings_url": "",
+                    "support_status": "unsupported",
+                    "support_reason_code": "fetch_failed",
+                    "support_error_detail": "timeout",
+                }
+            )
+        ]
+        raw_candidates = [
+            {
+                "symbol": "SWDA",
+                "isin": "",
+                "display_name": "iShares Core MSCI World UCITS ETF",
+                "asset_class": "Unknown",
+                "product_url": "https://example.test/swda",
+                "holdings_url": "",
+            },
+            {
+                "symbol": "EIMI",
+                "isin": "",
+                "display_name": "iShares Core MSCI EM IMI UCITS ETF",
+                "asset_class": "Unknown",
+                "product_url": "https://example.test/eimi",
+                "holdings_url": "",
+            },
+        ]
+
+        with (
+            patch.object(generate_etf_catalog, "_load_catalog_checkpoint", return_value=checkpoint_rows),
+            patch.object(
+                generate_etf_catalog,
+                "_process_catalog_candidate",
+                return_value=normalise_catalog_candidate(
+                    {
+                        "symbol": "EIMI",
+                        "isin": "IE00BKM4GZ66",
+                        "display_name": "iShares Core MSCI EM IMI UCITS ETF",
+                        "asset_class": "Equity",
+                        "product_url": "https://example.test/eimi",
+                        "holdings_url": "",
+                        "support_status": "unsupported",
+                        "support_reason_code": "fetch_failed",
+                        "support_error_detail": "timeout",
+                    }
+                ),
+            ) as process_mock,
+        ):
+            candidates = generate_etf_catalog._process_catalog_candidates(raw_candidates)
+
+        self.assertEqual([entry["symbol"] for entry in candidates], ["EIMI", "SWDA"])
+        self.assertEqual(process_mock.call_count, 1)
+        self.assertEqual(process_mock.call_args[0][0]["symbol"], "EIMI")
+
+    def test_process_catalog_candidates_logs_resume_progress_and_checkpoint_saves(self) -> None:
+        checkpoint_rows = [
+            normalise_catalog_candidate(
+                {
+                    "symbol": "SWDA",
+                    "isin": "IE00B4L5Y983",
+                    "display_name": "iShares Core MSCI World UCITS ETF",
+                    "asset_class": "Equity",
+                    "product_url": "https://example.test/swda",
+                    "holdings_url": "",
+                    "support_status": "unsupported",
+                    "support_reason_code": "fetch_failed",
+                    "support_error_detail": "timeout",
+                }
+            )
+        ]
+        raw_candidates = [
+            {
+                "symbol": "SWDA",
+                "isin": "",
+                "display_name": "iShares Core MSCI World UCITS ETF",
+                "asset_class": "Unknown",
+                "product_url": "https://example.test/swda",
+                "holdings_url": "",
+            },
+            {
+                "symbol": "IBGT",
+                "isin": "",
+                "display_name": "iShares $ Treasury Bond 1-3yr UCITS ETF",
+                "asset_class": "Unknown",
+                "product_url": "https://example.test/ibgt",
+                "holdings_url": "",
+            },
+        ]
+        processed_row = normalise_catalog_candidate(
+            {
+                "symbol": "IBGT",
+                "isin": "IE00B1FZS798",
+                "display_name": "iShares $ Treasury Bond 1-3yr UCITS ETF",
+                "asset_class": "Fixed Income",
+                "product_url": "https://example.test/ibgt",
+                "holdings_url": "",
+                "support_status": "unsupported",
+                "support_reason_code": "fetch_failed",
+                "support_error_detail": "timeout",
+            }
+        )
+
+        with (
+            patch.object(generate_etf_catalog, "_load_catalog_checkpoint", return_value=checkpoint_rows),
+            patch.object(generate_etf_catalog, "_process_catalog_candidate", return_value=processed_row),
+            patch.object(generate_etf_catalog, "_write_catalog_checkpoint"),
+            self.assertLogs(generate_etf_catalog.__name__, level="INFO") as captured,
+        ):
+            generate_etf_catalog._process_catalog_candidates(raw_candidates)
+
+        log_output = "\n".join(captured.output)
+        self.assertIn("Loaded checkpoint with 1 completed ETFs; 1 remaining", log_output)
+        self.assertIn(
+            "Processing overall 2/2, remaining 1/1 (IBGT): iShares $ Treasury Bond 1-3yr UCITS ETF",
+            log_output,
+        )
+        self.assertIn(
+            "Completed overall 2/2, remaining 1/1 (IBGT): unsupported (fetch_failed)",
+            log_output,
+        )
+        self.assertIn("Checkpoint saved with 2 completed ETFs", log_output)
+
+    def test_process_catalog_candidate_returns_unsupported_row_when_enrichment_retries_fail(self) -> None:
+        candidate = {
+            "symbol": "FAIL",
+            "isin": "",
+            "display_name": "Fail ETF",
+            "asset_class": "Unknown",
+            "product_url": "https://example.test/fail",
+            "holdings_url": "",
+        }
+
+        with patch.object(
+            generate_etf_catalog,
+            "_enrich_candidate_identity",
+            side_effect=TimeoutError("timeout while loading product page"),
+        ):
+            row = generate_etf_catalog._process_catalog_candidate(candidate)
+
+        self.assertEqual(row["symbol"], "FAIL")
+        self.assertEqual(row["support_status"], "unsupported")
+        self.assertEqual(row["support_reason_code"], "fetch_failed")
+        self.assertIn("timeout", row["support_error_detail"])
+
+    def test_process_catalog_candidate_marks_supported_row_after_successful_validation(self) -> None:
+        candidate = {
+            "symbol": "SWDA",
+            "isin": "",
+            "display_name": "iShares Core MSCI World UCITS ETF",
+            "asset_class": "Unknown",
+            "product_url": "https://example.test/swda",
+            "holdings_url": "",
+        }
+        enriched = {
+            **candidate,
+            "isin": "IE00B4L5Y983",
+            "asset_class": "Equity",
+        }
+
+        with (
+            patch.object(generate_etf_catalog, "_enrich_candidate_identity", return_value=enriched),
+            patch.object(
+                generate_etf_catalog,
+                "_validate_candidate_support",
+                side_effect=lambda row: (row.update({"holdings_url": "https://example.test/swda.csv"}) or (True, "", "")),
+            ),
+        ):
+            row = generate_etf_catalog._process_catalog_candidate(candidate)
+
+        self.assertEqual(row["support_status"], "supported")
+        self.assertEqual(row["holdings_url"], "https://example.test/swda.csv")
+
+    def test_main_removes_checkpoint_after_successful_completion(self) -> None:
+        discovered_candidates = [
+            {
+                "symbol": "SWDA",
+                "isin": "",
+                "display_name": "iShares Core MSCI World UCITS ETF",
+                "asset_class": "Unknown",
+                "product_url": "https://example.test/swda",
+                "holdings_url": "",
+            }
+        ]
+        processed_rows = [
+            normalise_catalog_candidate(
+                {
+                    "symbol": "SWDA",
+                    "isin": "IE00B4L5Y983",
+                    "display_name": "iShares Core MSCI World UCITS ETF",
+                    "asset_class": "Equity",
+                    "product_url": "https://example.test/swda",
+                    "holdings_url": "https://example.test/swda.csv",
+                    "support_status": "supported",
+                    "support_reason_code": "",
+                    "support_error_detail": "",
+                }
+            )
+        ]
+
+        with (
+            patch.object(generate_etf_catalog, "discover_ishares_candidates", return_value=(discovered_candidates, False)),
+            patch.object(generate_etf_catalog, "_process_catalog_candidates", return_value=processed_rows),
+            patch.object(generate_etf_catalog, "build_catalog_report", return_value={"supported": 1, "unsupported": 0}),
+            patch.object(generate_etf_catalog, "write_catalog"),
+            patch.object(generate_etf_catalog, "_clear_catalog_checkpoint") as clear_mock,
+        ):
+            generate_etf_catalog.main()
+
+        clear_mock.assert_called_once()
 
     def test_write_catalog_sorts_entries_deterministically(self) -> None:
         catalog = [

@@ -42,3 +42,4 @@ data/*
 !data/PIE_country_exposure_*.csv
 !data/PIE_sector_exposure_*.csv
 !data/PIE_combined_holdings_detail_*.parquet
+src/portfolio_analysis_app/data/etf_catalog.checkpoint.json

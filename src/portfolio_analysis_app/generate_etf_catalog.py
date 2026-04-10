@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import sys
+import time
 from time import perf_counter
 from collections import Counter
 from pathlib import Path
@@ -46,7 +47,7 @@ DISCOVERY_URL_TEMPLATE = (
     "&sortDirection=desc&dataView=keyFacts&keyFacts=all"
 )
 DISCOVERY_BASE_URL = "https://www.ishares.com"
-MAX_DISCOVERY_PAGES = 4
+MAX_DISCOVERY_PAGES = 2
 DISCOVERY_CANDIDATE_LIMIT = None
 PRODUCT_URL_PATTERN = re.compile(
     r'(?P<product_url>(?:https?://www\.ishares\.com)?/uk/individual/en/products/[^"\'\\<>\s]+)',
@@ -87,6 +88,8 @@ TEXT_ISIN_PATTERN = re.compile(r"\bISIN\b\s+([A-Z]{2}[A-Z0-9]{10})\b", re.IGNORE
 KNOWN_ASSET_CLASSES = ("Equity", "Fixed Income", "Commodity", "Multi Asset", "Real Estate")
 LOGGER = logging.getLogger(__name__)
 LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+CATALOG_CHECKPOINT_VERSION = 1
+CATALOG_CHECKPOINT_PATH = DEFAULT_ETF_CATALOG_PATH.with_name("etf_catalog.checkpoint.json")
 
 
 def normalise_catalog_candidate(candidate: dict[str, Any]) -> dict[str, str]:
@@ -225,6 +228,165 @@ def write_catalog(
     )
 
 
+def _load_catalog_checkpoint(
+    checkpoint_path: Path = CATALOG_CHECKPOINT_PATH,
+) -> list[dict[str, Any]]:
+    path = Path(checkpoint_path)
+    if not path.exists():
+        return []
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    rows = payload.get("completed_rows", [])
+    return rows if isinstance(rows, list) else []
+
+
+def _write_catalog_checkpoint(
+    completed_rows: list[dict[str, Any]],
+    discovered_count: int,
+    checkpoint_path: Path = CATALOG_CHECKPOINT_PATH,
+) -> None:
+    path = Path(checkpoint_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": CATALOG_CHECKPOINT_VERSION,
+        "discovered_count": discovered_count,
+        "completed_rows": completed_rows,
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _clear_catalog_checkpoint(checkpoint_path: Path = CATALOG_CHECKPOINT_PATH) -> None:
+    Path(checkpoint_path).unlink(missing_ok=True)
+
+
+def _candidate_resume_key(candidate: dict[str, Any]) -> str:
+    return _normalise_product_url(str(candidate.get("product_url", "")).strip())
+
+
+def _checkpoint_rows_by_key(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {_candidate_resume_key(row): row for row in rows}
+
+
+def _candidate_progress_label(candidate: dict[str, Any]) -> tuple[str, str]:
+    symbol = str(candidate.get("symbol", "")).strip().upper() or "UNKNOWN"
+    display_name = str(candidate.get("display_name", "")).strip() or str(candidate.get("product_url", "")).strip()
+    return symbol, display_name
+
+
+def _log_processing_queue(candidates: list[dict[str, Any]]) -> None:
+    total = len(candidates)
+    LOGGER.info("Queued %s ETF candidates for processing", total)
+    for index, candidate in enumerate(candidates, start=1):
+        symbol, display_name = _candidate_progress_label(candidate)
+        LOGGER.info("Queue: %s/%s %s - %s", index, total, symbol, display_name)
+
+
+def _enrich_candidate_with_retry(candidate: dict[str, str], attempts: int = 3) -> dict[str, str]:
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return _enrich_candidate_identity(candidate)
+        except Exception as exc:
+            last_error = exc
+            LOGGER.warning(
+                "Enrichment attempt %s/%s failed for %s: %s",
+                attempt,
+                attempts,
+                candidate.get("product_url", ""),
+                exc,
+            )
+            if attempt < attempts:
+                time.sleep(min(attempt * 0.1, 0.3))
+
+    if last_error is None:
+        raise RuntimeError("Enrichment retry loop exited without error")
+    raise last_error
+
+
+def _process_catalog_candidate(candidate: dict[str, str]) -> dict[str, str]:
+    normalized = normalise_catalog_candidate(candidate)
+    try:
+        enriched = _enrich_candidate_with_retry(dict(candidate))
+        normalized = normalise_catalog_candidate(enriched)
+        is_supported, reason_code, error_detail = _validate_candidate_support(normalized)
+    except Exception as exc:
+        normalized["support_status"] = "unsupported"
+        normalized["support_reason_code"] = "fetch_failed"
+        normalized["support_error_detail"] = str(exc)
+        return normalized
+
+    normalized["support_status"] = "supported" if is_supported else "unsupported"
+    normalized["support_reason_code"] = reason_code
+    normalized["support_error_detail"] = error_detail
+    return normalized
+
+
+def _process_catalog_candidates(
+    candidates: list[dict[str, str]],
+    checkpoint_path: Path = CATALOG_CHECKPOINT_PATH,
+) -> list[dict[str, str]]:
+    completed_rows = _load_catalog_checkpoint(checkpoint_path)
+    completed_by_key = _checkpoint_rows_by_key(completed_rows)
+    total_candidates = len(candidates)
+    remaining_candidates = [
+        candidate
+        for candidate in candidates
+        if _candidate_resume_key(candidate) not in completed_by_key
+    ]
+    total_remaining = len(remaining_candidates)
+
+    if completed_rows:
+        LOGGER.info(
+            "Loaded checkpoint with %s completed ETFs; %s remaining",
+            len(completed_rows),
+            max(total_candidates - len(completed_rows), 0),
+        )
+
+    remaining_index = 0
+    for candidate in candidates:
+        resume_key = _candidate_resume_key(candidate)
+        if resume_key in completed_by_key:
+            continue
+
+        remaining_index += 1
+        overall_index = len(completed_rows) + 1
+        symbol, display_name = _candidate_progress_label(candidate)
+        LOGGER.info(
+            "Processing overall %s/%s, remaining %s/%s (%s): %s",
+            overall_index,
+            total_candidates,
+            remaining_index,
+            total_remaining,
+            symbol,
+            display_name,
+        )
+        completed_row = _process_catalog_candidate(candidate)
+        completed_rows.append(completed_row)
+        completed_by_key[resume_key] = completed_row
+        completed_symbol, _ = _candidate_progress_label(completed_row)
+        if completed_row.get("support_status") == "supported":
+            completion_status = "supported"
+        else:
+            completion_status = f"unsupported ({completed_row.get('support_reason_code', '').strip() or 'validation_failed'})"
+        LOGGER.info(
+            "Completed overall %s/%s, remaining %s/%s (%s): %s",
+            len(completed_rows),
+            total_candidates,
+            remaining_index,
+            total_remaining,
+            completed_symbol,
+            completion_status,
+        )
+        _write_catalog_checkpoint(
+            completed_rows=completed_rows,
+            discovered_count=len(candidates),
+            checkpoint_path=checkpoint_path,
+        )
+        LOGGER.info("Checkpoint saved with %s completed ETFs", len(completed_rows))
+
+    return sorted(completed_rows, key=lambda entry: (entry["display_name"], entry["symbol"]))
+
+
 def get_discovery_candidate_limit() -> int | None:
     return load_app_config().catalog.discovery_candidate_limit
 
@@ -277,36 +439,20 @@ def discover_ishares_candidates() -> tuple[list[dict[str, str]], bool]:
             LOGGER.info("Stopping discovery early after page %s returned no candidates", page_number)
             break
 
-    candidates: list[dict[str, str]] = []
     unique_candidates = list(discovered.values())
     if discovery_candidate_limit is not None:
         unique_candidates = unique_candidates[:discovery_candidate_limit]
     if unique_candidates:
-        LOGGER.info("Enriching %s unique ETF candidates", len(unique_candidates))
-        LOGGER.info(f"Candidates are: {unique_candidates}")
-    for index, candidate in enumerate(unique_candidates, start=1):
-        enrich_started_at = perf_counter()
-        enriched_candidate = _enrich_candidate_identity(candidate)
-        candidates.append(enriched_candidate)
-        candidate_label = (
-            enriched_candidate.get("symbol")
-            or enriched_candidate.get("display_name")
-            or enriched_candidate.get("product_url", "")
-        )
-        LOGGER.info(
-            "Enriched candidate %s/%s (%s) in %s",
-            index,
-            len(unique_candidates),
-            candidate_label,
-            _format_elapsed(perf_counter() - enrich_started_at),
-        )
-    if candidates:
+        _log_processing_queue(unique_candidates)
         LOGGER.info(
             "Discovered %s ETF candidates in %s",
-            len(candidates),
+            len(unique_candidates),
             _format_elapsed(perf_counter() - discovery_started_at),
         )
-        return sorted(candidates, key=lambda entry: (entry["symbol"], entry["isin"], entry["product_url"])), False
+        return sorted(
+            unique_candidates,
+            key=lambda entry: (entry["symbol"], entry["isin"], entry["product_url"]),
+        ), False
 
     # Fallback to the currently committed catalogue when the product-list markup changes.
     fallback_catalog = load_etf_catalog(DEFAULT_ETF_CATALOG_PATH)
@@ -346,8 +492,14 @@ def main() -> None:
     started_at = perf_counter()
     LOGGER.info("Starting ETF catalog generation")
     candidates, used_fallback = discover_ishares_candidates()
-    catalog, report = build_supported_catalog(candidates, used_fallback=used_fallback)
+    catalog = _process_catalog_candidates(candidates)
+    report = build_catalog_report(
+        discovered=len(candidates),
+        catalog=catalog,
+        used_fallback=used_fallback,
+    )
     write_catalog(catalog, DEFAULT_ETF_CATALOG_PATH)
+    _clear_catalog_checkpoint()
     LOGGER.info(
         "ETF catalog generation finished in %s (%s supported, %s unsupported)",
         _format_elapsed(perf_counter() - started_at),
