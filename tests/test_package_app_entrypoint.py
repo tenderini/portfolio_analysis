@@ -14,6 +14,8 @@ class FakeStreamlit(types.ModuleType):
         super().__init__("streamlit")
         self.page_config_calls: list[dict] = []
         self.error_calls: list[tuple] = []
+        self.control_labels: list[str] = []
+        self.session_state: dict = {}
 
     def cache_data(self, **kwargs):
         def decorator(func):
@@ -32,6 +34,65 @@ class FakeStreamlit(types.ModuleType):
     def error(self, *args, **kwargs):
         self.error_calls.append(args)
         return None
+
+    def info(self, *args, **kwargs):
+        return None
+
+    def warning(self, *args, **kwargs):
+        return None
+
+    def success(self, *args, **kwargs):
+        return None
+
+    def subheader(self, *args, **kwargs):
+        return None
+
+    def caption(self, *args, **kwargs):
+        return None
+
+    def write(self, *args, **kwargs):
+        return None
+
+    def columns(self, count_or_widths):
+        count = count_or_widths if isinstance(count_or_widths, int) else len(count_or_widths)
+        return [self for _ in range(count)]
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def metric(self, *args, **kwargs):
+        return None
+
+    def dataframe(self, *args, **kwargs):
+        return None
+
+    def plotly_chart(self, *args, **kwargs):
+        return None
+
+    def selectbox(self, label, options, index=0, format_func=None):
+        self.control_labels.append(label)
+        return list(options)[index]
+
+    def text_input(self, label, value="", placeholder=None, **kwargs):
+        self.control_labels.append(label)
+        return value
+
+    def number_input(self, label, value=0.0, **kwargs):
+        self.control_labels.append(label)
+        return value
+
+    def button(self, label, **kwargs):
+        self.control_labels.append(label)
+        return False
+
+    def tabs(self, labels):
+        return [self for _ in labels]
+
+    def expander(self, *args, **kwargs):
+        return self
 
     def stop(self):
         raise StopCalled()
@@ -61,6 +122,7 @@ class PackageAppEntrypointTests(unittest.TestCase):
         fake_metrics.build_summary_metrics = lambda summary: []
         fake_portfolio = types.ModuleType("src.portfolio_analysis_app.portfolio_analysis")
         fake_portfolio.build_report = lambda snapshot_date=None: {}
+        fake_portfolio.build_report_from_holdings = lambda combined_holdings, snapshot_label, files=None, source_exposures=None, etf_descriptions=None: {}
         fake_portfolio.filter_company_exposure = lambda df, search_text="": df
         fake_portfolio.format_snapshot_date = lambda snapshot_date: snapshot_date
         fake_portfolio.get_company_drilldown = lambda df, company: df
@@ -68,6 +130,22 @@ class PackageAppEntrypointTests(unittest.TestCase):
             lambda etf_breakdown, company_drivers, dimension, value: {}
         )
         fake_portfolio.list_available_snapshot_dates = lambda: []
+        fake_custom_portfolios = types.ModuleType("src.portfolio_analysis_app.custom_portfolios")
+        fake_custom_portfolios.DEFAULT_PORTFOLIO_NAME = "PIE Default"
+        fake_custom_portfolios.load_saved_portfolios = lambda data_dir=None: []
+        fake_custom_portfolios.save_saved_portfolios = lambda portfolios, data_dir=None: None
+        fake_custom_portfolios.resolve_portfolio_entries = lambda entries: []
+        fake_custom_portfolios.validate_portfolio_entries = (
+            lambda entries: {"is_valid": False, "errors": ["No saved portfolios are available."], "total_weight_pct": 0.0}
+        )
+        fake_custom_portfolios.build_combined_holdings_for_portfolio = (
+            lambda entries, data_dir=None: {"combined_holdings": {}, "snapshot_label": "", "etf_descriptions": []}
+        )
+        fake_custom_portfolios.refresh_supported_etf_snapshot = lambda entry, data_dir=None: None
+        fake_etf_catalog = types.ModuleType("src.portfolio_analysis_app.etf_catalog")
+        fake_etf_catalog.load_etf_catalog = lambda catalog_path=None: []
+        fake_etf_catalog.search_etf_catalog = lambda query, catalog=None, limit=20: []
+        fake_etf_catalog.build_catalog_dataframe = lambda catalog=None, data_dir=None: {}
         fake_plotly = types.ModuleType("plotly")
         fake_plotly_express = types.ModuleType("plotly.express")
 
@@ -84,6 +162,8 @@ class PackageAppEntrypointTests(unittest.TestCase):
                 "src.portfolio_analysis_app.app_theme",
                 "src.portfolio_analysis_app.dashboard_metrics",
                 "src.portfolio_analysis_app.portfolio_analysis",
+                "src.portfolio_analysis_app.custom_portfolios",
+                "src.portfolio_analysis_app.etf_catalog",
             ]
         }
         sys.modules["pandas"] = fake_pandas
@@ -96,6 +176,8 @@ class PackageAppEntrypointTests(unittest.TestCase):
         sys.modules["src.portfolio_analysis_app.app_theme"] = fake_theme
         sys.modules["src.portfolio_analysis_app.dashboard_metrics"] = fake_metrics
         sys.modules["src.portfolio_analysis_app.portfolio_analysis"] = fake_portfolio
+        sys.modules["src.portfolio_analysis_app.custom_portfolios"] = fake_custom_portfolios
+        sys.modules["src.portfolio_analysis_app.etf_catalog"] = fake_etf_catalog
 
         try:
             with self.assertRaises(StopCalled):
@@ -108,4 +190,4 @@ class PackageAppEntrypointTests(unittest.TestCase):
                     sys.modules[name] = previous_module
 
         self.assertEqual(fake_streamlit.page_config_calls[0]["page_title"], "PIE Portfolio Analysis")
-        self.assertEqual(fake_streamlit.error_calls, [("No complete PIE snapshots were found in ./data.",)])
+        self.assertEqual(fake_streamlit.error_calls, [("No saved portfolios are available.",)])

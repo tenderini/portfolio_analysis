@@ -159,12 +159,17 @@ def load_snapshot_inputs(snapshot_date: str | None = None, data_dir: Path | str 
     }
 
 
-def build_report(snapshot_date: str | None = None, data_dir: Path | str = DATA_DIR) -> dict[str, Any]:
-    snapshot_inputs = load_snapshot_inputs(snapshot_date=snapshot_date, data_dir=data_dir)
-    combined_holdings = snapshot_inputs["combined_holdings"]
+def build_report_from_holdings(
+    combined_holdings: pd.DataFrame,
+    snapshot_label: str,
+    files: dict[str, Path] | None = None,
+    source_exposures: dict[str, pd.DataFrame] | None = None,
+    etf_descriptions: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
     company_view_holdings = _filter_company_analytics_holdings(combined_holdings)
     cash_equivalent_holdings = _build_cash_equivalent_holdings(combined_holdings)
     continent_holdings = _add_continent_column(combined_holdings)
+    source_exposures = source_exposures or {}
 
     single_etf_options = sorted(combined_holdings["parent_etf"].dropna().unique().tolist())
     single_etf_analysis = {
@@ -180,19 +185,19 @@ def build_report(snapshot_date: str | None = None, data_dir: Path | str = DATA_D
     company_exposure = _build_dimension_exposure(
         company_view_holdings,
         "company",
-        fallback=snapshot_inputs["source_company_exposure"],
+        fallback=source_exposures.get("company_exposure"),
     )
     country_exposure = _build_dimension_exposure(
         combined_holdings,
         "country",
-        fallback=snapshot_inputs["source_country_exposure"],
+        fallback=source_exposures.get("country_exposure"),
     )
     continent_company_holdings = _add_continent_column(company_view_holdings)
     continent_exposure = _build_dimension_exposure(continent_holdings, "continent")
     sector_exposure = _build_dimension_exposure(
         combined_holdings,
         "sector",
-        fallback=snapshot_inputs["source_sector_exposure"],
+        fallback=source_exposures.get("sector_exposure"),
     )
 
     company_etf_breakdown = _build_etf_breakdown(company_view_holdings, "company")
@@ -208,11 +213,12 @@ def build_report(snapshot_date: str | None = None, data_dir: Path | str = DATA_D
         country_exposure=country_exposure,
         sector_exposure=sector_exposure,
     )
-    etf_descriptions = _build_etf_descriptions(etf_composition["parent_etf"].tolist())
+    if etf_descriptions is None:
+        etf_descriptions = _build_etf_descriptions(etf_composition["parent_etf"].tolist())
 
     return {
-        "snapshot_date": snapshot_inputs["snapshot_date"],
-        "files": snapshot_inputs["files"],
+        "snapshot_date": snapshot_label,
+        "files": files or {},
         "combined_holdings": combined_holdings,
         "cash_equivalent_holdings": cash_equivalent_holdings,
         "etf_composition": etf_composition,
@@ -244,6 +250,20 @@ def build_report(snapshot_date: str | None = None, data_dir: Path | str = DATA_D
             "cash_equivalent_total_pct": float(cash_equivalent_holdings["contribution_pct"].sum()),
         },
     }
+
+
+def build_report(snapshot_date: str | None = None, data_dir: Path | str = DATA_DIR) -> dict[str, Any]:
+    snapshot_inputs = load_snapshot_inputs(snapshot_date=snapshot_date, data_dir=data_dir)
+    return build_report_from_holdings(
+        combined_holdings=snapshot_inputs["combined_holdings"],
+        snapshot_label=snapshot_inputs["snapshot_date"],
+        files=snapshot_inputs["files"],
+        source_exposures={
+            "company_exposure": snapshot_inputs["source_company_exposure"],
+            "country_exposure": snapshot_inputs["source_country_exposure"],
+            "sector_exposure": snapshot_inputs["source_sector_exposure"],
+        },
+    )
 
 
 def filter_company_exposure(company_exposure: pd.DataFrame, search_text: str = "") -> pd.DataFrame:

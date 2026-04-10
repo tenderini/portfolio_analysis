@@ -3,6 +3,7 @@ from __future__ import annotations
 from html import escape
 from pathlib import Path
 import sys
+from typing import Any
 
 import pandas as pd
 import streamlit as st
@@ -23,13 +24,26 @@ if __package__ in {None, ""}:
         build_theme_css,
     )
     from src.portfolio_analysis_app.dashboard_metrics import build_summary_metrics
+    from src.portfolio_analysis_app.custom_portfolios import (
+        DEFAULT_PORTFOLIO_NAME,
+        build_combined_holdings_for_portfolio,
+        load_saved_portfolios,
+        refresh_supported_etf_snapshot,
+        resolve_portfolio_entries,
+        save_saved_portfolios,
+        validate_portfolio_entries,
+    )
+    from src.portfolio_analysis_app.etf_catalog import (
+        build_catalog_dataframe,
+        load_etf_catalog,
+        search_etf_catalog,
+    )
     from src.portfolio_analysis_app.portfolio_analysis import (
-        build_report,
+        build_report_from_holdings,
         filter_company_exposure,
         format_snapshot_date,
         get_company_drilldown,
         get_dimension_drilldown,
-        list_available_snapshot_dates,
     )
 else:
     from .app_config import load_app_config
@@ -42,13 +56,26 @@ else:
         build_theme_css,
     )
     from .dashboard_metrics import build_summary_metrics
+    from .custom_portfolios import (
+        DEFAULT_PORTFOLIO_NAME,
+        build_combined_holdings_for_portfolio,
+        load_saved_portfolios,
+        refresh_supported_etf_snapshot,
+        resolve_portfolio_entries,
+        save_saved_portfolios,
+        validate_portfolio_entries,
+    )
+    from .etf_catalog import (
+        build_catalog_dataframe,
+        load_etf_catalog,
+        search_etf_catalog,
+    )
     from .portfolio_analysis import (
-        build_report,
+        build_report_from_holdings,
         filter_company_exposure,
         format_snapshot_date,
         get_company_drilldown,
         get_dimension_drilldown,
-        list_available_snapshot_dates,
     )
 
 try:
@@ -58,11 +85,6 @@ except ImportError:  # pragma: no cover - optional dependency
 
 
 PLOTLY_STATIC_CONFIG = {"staticPlot": True, "displayModeBar": False}
-
-
-@st.cache_data(show_spinner=False)
-def load_report(snapshot_date: str) -> dict:
-    return build_report(snapshot_date=snapshot_date)
 
 
 def render_bar_chart(data: pd.DataFrame, label_column: str, title: str, top_n: int) -> None:
@@ -280,6 +302,214 @@ def render_cash_equivalent_table(df: pd.DataFrame, height: int = 320) -> None:
     )
 
 
+def _normalise_portfolio_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not entries:
+        return [{"etf_id": "", "weight_pct": 0.0, "search_text": ""}]
+
+    normalised_entries = []
+    for entry in entries:
+        normalised_entries.append(
+            {
+                "etf_id": str(entry.get("etf_id", "")),
+                "weight_pct": float(entry.get("weight_pct", 0.0) or 0.0),
+                "search_text": str(entry.get("search_text", "")),
+            }
+        )
+    return normalised_entries
+
+
+def _set_portfolio_editor_state(portfolio: dict[str, Any]) -> None:
+    st.session_state["selected_portfolio_name"] = str(portfolio.get("name", DEFAULT_PORTFOLIO_NAME))
+    st.session_state["portfolio_editor_name"] = str(portfolio.get("name", DEFAULT_PORTFOLIO_NAME))
+    st.session_state["portfolio_editor_entries"] = _normalise_portfolio_entries(
+        list(portfolio.get("entries", []))
+    )
+
+
+def _upsert_saved_portfolio(
+    saved_portfolios: list[dict[str, Any]],
+    portfolio_name: str,
+    entries: list[dict[str, Any]],
+    selected_name: str,
+) -> list[dict[str, Any]]:
+    cleaned_name = portfolio_name.strip() or selected_name or DEFAULT_PORTFOLIO_NAME
+    updated_portfolio = {
+        "name": cleaned_name,
+        "entries": _normalise_portfolio_entries(entries),
+    }
+
+    updated_portfolios: list[dict[str, Any]] = []
+    replaced = False
+    for portfolio in saved_portfolios:
+        if str(portfolio.get("name")) == selected_name:
+            updated_portfolios.append(updated_portfolio)
+            replaced = True
+            continue
+
+        if str(portfolio.get("name")) == cleaned_name and cleaned_name != selected_name:
+            raise ValueError(f'A saved portfolio named "{cleaned_name}" already exists.')
+        updated_portfolios.append(portfolio)
+
+    if not replaced:
+        updated_portfolios.append(updated_portfolio)
+    return updated_portfolios
+
+
+def _render_catalogue_match_picker(
+    row_index: int,
+    entry: dict[str, Any],
+    catalog: list[dict[str, Any]],
+) -> dict[str, Any]:
+    search_text = st.text_input(
+        f"Search ETF {row_index}",
+        value=str(entry.get("search_text", "")),
+    )
+    matches = search_etf_catalog(search_text, catalog)
+    labels = ["Select ETF..."] + [
+        f'{match["symbol"]} · {match["isin"]} · {match["display_name"]}'
+        for match in matches
+    ]
+    label_to_id = {"Select ETF...": ""}
+    label_to_id.update(
+        {
+            f'{match["symbol"]} · {match["isin"]} · {match["display_name"]}': match["etf_id"]
+            for match in matches
+        }
+    )
+    current_id = str(entry.get("etf_id", ""))
+    current_label = next(
+        (label for label, etf_id in label_to_id.items() if etf_id == current_id),
+        labels[0],
+    )
+    selected_label = st.selectbox(
+        f"Match {row_index}",
+        options=labels,
+        index=labels.index(current_label),
+    )
+    return {
+        "etf_id": label_to_id[selected_label],
+        "weight_pct": float(entry.get("weight_pct", 0.0) or 0.0),
+        "search_text": search_text,
+    }
+
+
+def _render_portfolio_builder(
+    saved_portfolios: list[dict[str, Any]],
+    catalog: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not saved_portfolios:
+        st.error("No saved portfolios are available.")
+        st.stop()
+
+    portfolios_by_name = {str(portfolio["name"]): portfolio for portfolio in saved_portfolios}
+    if (
+        "selected_portfolio_name" not in st.session_state
+        or st.session_state["selected_portfolio_name"] not in portfolios_by_name
+    ):
+        _set_portfolio_editor_state(saved_portfolios[0])
+
+    portfolio_names = list(portfolios_by_name)
+    current_name = str(st.session_state["selected_portfolio_name"])
+    current_index = portfolio_names.index(current_name)
+
+    with st.expander("Portfolio Builder", expanded=True):
+        selected_name = st.selectbox("Saved portfolio", options=portfolio_names, index=current_index)
+        if selected_name != current_name:
+            _set_portfolio_editor_state(portfolios_by_name[selected_name])
+            current_name = selected_name
+
+        portfolio_name = st.text_input(
+            "Portfolio name",
+            value=str(st.session_state.get("portfolio_editor_name", current_name)),
+        )
+        st.session_state["portfolio_editor_name"] = portfolio_name
+
+        editor_entries = _normalise_portfolio_entries(
+            list(st.session_state.get("portfolio_editor_entries", []))
+        )
+        if st.button("Add ETF"):
+            editor_entries.append({"etf_id": "", "weight_pct": 0.0, "search_text": ""})
+
+        rendered_entries: list[dict[str, Any]] = []
+        remove_index: int | None = None
+        for index, entry in enumerate(editor_entries, start=1):
+            row_columns = st.columns([1.7, 1.6, 1.0, 0.8])
+            with row_columns[0]:
+                rendered_entry = _render_catalogue_match_picker(index, entry, catalog)
+            with row_columns[1]:
+                weight_pct = st.number_input(
+                    f"Weight {index}",
+                    value=float(entry.get("weight_pct", 0.0) or 0.0),
+                    min_value=0.0,
+                    step=0.5,
+                    format="%.2f",
+                )
+            with row_columns[2]:
+                if len(editor_entries) > 1 and st.button(f"Remove ETF {index}"):
+                    remove_index = index - 1
+            rendered_entry["weight_pct"] = weight_pct
+            rendered_entries.append(rendered_entry)
+
+        if remove_index is not None:
+            rendered_entries.pop(remove_index)
+
+        st.session_state["portfolio_editor_entries"] = _normalise_portfolio_entries(rendered_entries)
+
+        if st.button("Save portfolio"):
+            try:
+                updated_portfolios = _upsert_saved_portfolio(
+                    saved_portfolios=saved_portfolios,
+                    portfolio_name=portfolio_name,
+                    entries=rendered_entries,
+                    selected_name=current_name,
+                )
+            except ValueError as exc:
+                st.error(str(exc))
+            else:
+                save_saved_portfolios(updated_portfolios)
+                _set_portfolio_editor_state(
+                    next(
+                        portfolio
+                        for portfolio in updated_portfolios
+                        if portfolio["name"] == (portfolio_name.strip() or current_name or DEFAULT_PORTFOLIO_NAME)
+                    )
+                )
+                saved_portfolios[:] = updated_portfolios
+                portfolios_by_name = {str(portfolio["name"]): portfolio for portfolio in saved_portfolios}
+                st.success("Portfolio saved.")
+
+        resolved_entries = resolve_portfolio_entries(st.session_state["portfolio_editor_entries"])
+        validation = validate_portfolio_entries(st.session_state["portfolio_editor_entries"])
+
+        for entry in resolved_entries:
+            etf_id = str(entry.get("etf_id", "")).strip()
+            search_text = str(entry.get("search_text", "")).strip()
+            if not etf_id and not search_text:
+                continue
+            if entry.get("error"):
+                label = search_text or etf_id
+                st.markdown(f'Invalid ETF: `{escape(label)}`. {escape(str(entry["error"]))}')
+                continue
+
+            st.markdown(
+                f'`{escape(str(entry["symbol"]))}` · {escape(str(entry["isin"]))} · {escape(str(entry["display_name"]))}'
+            )
+            if st.button(f'Refresh {entry["symbol"]}'):
+                try:
+                    refresh_supported_etf_snapshot(entry)
+                except Exception as exc:  # pragma: no cover - runtime/network path
+                    st.error(str(exc))
+                else:  # pragma: no cover - runtime/network path
+                    st.success(f'Refreshed cached holdings for {entry["symbol"]}.')
+
+        return {
+            "portfolio_name": portfolio_name.strip() or current_name or DEFAULT_PORTFOLIO_NAME,
+            "entries": st.session_state["portfolio_editor_entries"],
+            "resolved_entries": resolved_entries,
+            "validation": validation,
+        }
+
+
 def main() -> None:
     app_config = load_app_config()
 
@@ -288,24 +518,35 @@ def main() -> None:
         layout="wide",
     )
     st.markdown(build_theme_css(), unsafe_allow_html=True)
-
-    available_dates = list_available_snapshot_dates()
-    if not available_dates:
-        st.error("No complete PIE snapshots were found in ./data.")
-        st.stop()
-
-    snapshot_date = available_dates[0]
     top_n = app_config.ui.top_n
     company_search = ""
+    catalog = load_etf_catalog()
+    saved_portfolios = load_saved_portfolios()
+    builder_state = _render_portfolio_builder(saved_portfolios, catalog)
 
-    report = load_report(snapshot_date)
+    if not builder_state["validation"]["is_valid"]:
+        for error in builder_state["validation"]["errors"]:
+            st.markdown(escape(error))
+        st.stop()
+
+    try:
+        portfolio_inputs = build_combined_holdings_for_portfolio(builder_state["entries"])
+    except Exception as exc:
+        st.error(str(exc))
+        st.stop()
+
+    report = build_report_from_holdings(
+        combined_holdings=portfolio_inputs["combined_holdings"],
+        snapshot_label=portfolio_inputs["snapshot_label"],
+        etf_descriptions=portfolio_inputs["etf_descriptions"],
+    )
     display_snapshot_date = format_snapshot_date(report["snapshot_date"])
 
     st.markdown(
         f"""
         <div class="dashboard-banner">
           <h1>{app_config.content.dashboard_title}</h1>
-          <p>{app_config.content.snapshot_description_template.format(snapshot_date=display_snapshot_date)}</p>
+          <p>{escape(builder_state["portfolio_name"])} · {app_config.content.snapshot_description_template.format(snapshot_date=display_snapshot_date)}</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -321,13 +562,13 @@ def main() -> None:
     for column, metric in zip(metric_columns, headline_metrics):
         column.metric(metric["label"], metric["value"])
 
-    overview_tab, companies_tab, geography_tab, sectors_tab, overlap_tab, single_etf_tab = st.tabs(
-        ["Overview", "Companies", "Countries/Continents", "Sectors", "Overlap", "Single ETF Analysis"]
+    overview_tab, companies_tab, geography_tab, sectors_tab, overlap_tab, single_etf_tab, catalogue_tab = st.tabs(
+        ["Overview", "Companies", "Countries/Continents", "Sectors", "Overlap", "Single ETF Analysis", "ETF Catalogue"]
     )
 
     with overview_tab:
         st.subheader("Portfolio Composition")
-        st.caption("Fixed ETF allocation for the selected PIE snapshot.")
+        st.caption("Current ETF allocation for the selected saved portfolio.")
         render_etf_description_cards(report["etf_descriptions"])
         st.markdown('<div class="etf-description-spacer"></div>', unsafe_allow_html=True)
         composition_cols = st.columns([1.1, 0.9])
@@ -543,6 +784,26 @@ def main() -> None:
                 )
             with section_cols[1]:
                 render_weight_table(section_data, label_column, height=360)
+
+    with catalogue_tab:
+        st.subheader("Supported ETF Catalogue")
+        catalogue_search = st.text_input("Catalogue search", value="")
+        catalogue_df = build_catalog_dataframe(
+            search_etf_catalog(catalogue_search, catalog),
+            data_dir=Path("data"),
+        )
+        st.dataframe(
+            catalogue_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "symbol": st.column_config.TextColumn("Ticker"),
+                "isin": st.column_config.TextColumn("ISIN"),
+                "display_name": st.column_config.TextColumn("ETF"),
+                "asset_class": st.column_config.TextColumn("Asset class"),
+                "cached_snapshot": st.column_config.TextColumn("Cached snapshot"),
+            },
+        )
 
 
 if __name__ == "__main__":

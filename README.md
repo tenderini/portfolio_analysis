@@ -17,4 +17,14 @@ streamlit run app.py
 ## Notes
 
 - No command-line interface is required for the report builder or dashboard
-- `data_retrival.py` is left unchanged
+- The dashboard now supports saved custom portfolios and a committed ETF catalogue
+
+## Refreshing the ETF catalogue
+
+Run the offline generator when you want to update the committed supported-ETF universe:
+
+```bash
+./.venv/bin/python -m src.portfolio_analysis_app.generate_etf_catalog
+```
+
+Review the resulting changes in `src/portfolio_analysis_app/data/etf_catalog.json` before committing them.

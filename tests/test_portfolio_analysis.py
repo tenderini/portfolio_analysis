@@ -2,12 +2,17 @@ import unittest
 
 import pandas as pd
 
+from src.portfolio_analysis_app.custom_portfolios import (
+    build_combined_holdings_for_portfolio,
+    resolve_portfolio_entries,
+)
 from src.portfolio_analysis_app.portfolio_analysis import (
     _build_continent_exposure,
     _build_overlap_table,
     _build_etf_composition,
     _is_cash_equivalent_mask,
     _build_single_etf_dimension_exposure,
+    build_report_from_holdings,
     build_report,
     format_snapshot_date,
     get_dimension_drilldown,
@@ -222,3 +227,26 @@ class CashEquivalentClassificationTests(unittest.TestCase):
 
         self.assertEqual(overlap["company"].tolist(), ["FIRSTCASH HOLDINGS INC"])
         self.assertEqual(overlap["num_etfs"].tolist(), [2])
+
+
+class CustomPortfolioReportTests(unittest.TestCase):
+    def test_build_report_from_holdings_supports_custom_saved_portfolios(self) -> None:
+        entries = resolve_portfolio_entries(
+            [
+                {"etf_id": "ishares-swda-ie00b4l5y983", "weight_pct": 78.0},
+                {"etf_id": "ishares-emim-ie00bkm4gz66", "weight_pct": 12.0},
+                {"etf_id": "ishares-wsml-ie00bf4rfh31", "weight_pct": 10.0},
+            ]
+        )
+        portfolio_inputs = build_combined_holdings_for_portfolio(entries, data_dir="data")
+
+        report = build_report_from_holdings(
+            combined_holdings=portfolio_inputs["combined_holdings"],
+            snapshot_label=portfolio_inputs["snapshot_label"],
+            etf_descriptions=portfolio_inputs["etf_descriptions"],
+        )
+
+        self.assertEqual(report["snapshot_date"], "Apr 8, 2026")
+        self.assertEqual(report["etf_composition"]["parent_etf"].tolist(), ["SWDA", "EMIM", "WSML"])
+        self.assertEqual([item["ticker"] for item in report["etf_descriptions"]], ["SWDA", "EMIM", "WSML"])
+        self.assertAlmostEqual(report["summary"]["portfolio_total_pct"], 99.92, places=2)
