@@ -521,8 +521,11 @@ def main() -> None:
     top_n = app_config.ui.top_n
     company_search = ""
     catalog = load_etf_catalog()
+    supported_catalog = [
+        entry for entry in catalog if str(entry.get("support_status", "supported")) == "supported"
+    ]
     saved_portfolios = load_saved_portfolios()
-    builder_state = _render_portfolio_builder(saved_portfolios, catalog)
+    builder_state = _render_portfolio_builder(saved_portfolios, supported_catalog)
 
     if not builder_state["validation"]["is_valid"]:
         for error in builder_state["validation"]["errors"]:
@@ -786,7 +789,7 @@ def main() -> None:
                 render_weight_table(section_data, label_column, height=360)
 
     with catalogue_tab:
-        st.subheader("Supported ETF Catalogue")
+        st.subheader("ETF Catalogue")
         catalogue_search = st.text_input("Catalogue search", value="")
         catalogue_df = build_catalog_dataframe(
             search_etf_catalog(catalogue_search, catalog),

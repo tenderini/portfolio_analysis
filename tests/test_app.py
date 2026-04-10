@@ -560,6 +560,53 @@ class AppLayoutTests(unittest.TestCase):
         self.assertIn("Add ETF", fake_streamlit.control_labels)
         self.assertIn("Save portfolio", fake_streamlit.control_labels)
 
+    def test_app_uses_supported_catalog_for_builder_and_full_catalogue_for_browse_page(self) -> None:
+        catalog_search_inputs: list[list[str]] = []
+
+        def fake_search(query, catalog=None, limit=20):
+            catalog_search_inputs.append(
+                [str(entry.get("support_status", "supported")) for entry in (catalog or [])]
+            )
+            return (catalog or [])[:limit]
+
+        self.load_app(
+            fake_etf_catalog=types.SimpleNamespace(
+                load_etf_catalog=lambda catalog_path=None: [
+                    {
+                        "etf_id": "ishares-swda-ie00b4l5y983",
+                        "symbol": "SWDA",
+                        "isin": "IE00B4L5Y983",
+                        "display_name": "iShares Core MSCI World UCITS ETF",
+                        "asset_class": "Equity",
+                        "product_url": "https://example.test/swda",
+                        "holdings_url": "https://example.test/swda.csv",
+                        "search_text": "swda ie00b4l5y983 ishares core msci world ucits etf",
+                        "support_status": "supported",
+                        "support_reason_code": "",
+                        "support_error_detail": "",
+                    },
+                    {
+                        "etf_id": "ishares-bad-ie00badbad01",
+                        "symbol": "BAD",
+                        "isin": "IE00BADBAD01",
+                        "display_name": "Broken ETF",
+                        "asset_class": "Equity",
+                        "product_url": "https://example.test/bad",
+                        "holdings_url": "",
+                        "search_text": "bad ie00badbad01 broken etf",
+                        "support_status": "unsupported",
+                        "support_reason_code": "parse_failed",
+                        "support_error_detail": "Unable to parse holdings CSV.",
+                    },
+                ],
+                search_etf_catalog=fake_search,
+                build_catalog_dataframe=lambda catalog=None, data_dir=None: pd.DataFrame([]),
+            )
+        )
+
+        self.assertIn(["supported"], catalog_search_inputs)
+        self.assertIn(["supported", "unsupported"], catalog_search_inputs)
+
     def test_app_blocks_analysis_when_saved_portfolio_references_missing_catalog_entry(self) -> None:
         fake_streamlit = self.load_app(
             fake_custom_portfolios=types.SimpleNamespace(

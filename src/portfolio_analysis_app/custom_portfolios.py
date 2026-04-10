@@ -98,7 +98,10 @@ def resolve_portfolio_entries(entries: list[dict[str, Any]]) -> list[dict[str, A
             "product_page": "",
             "holdings_url": "",
             "issuer": "",
-            "is_supported": catalog_entry is not None,
+            "is_supported": False,
+            "support_status": "",
+            "support_reason_code": "",
+            "support_error_detail": "",
             "error": "",
         }
         if catalog_entry is None:
@@ -113,8 +116,17 @@ def resolve_portfolio_entries(entries: list[dict[str, Any]]) -> list[dict[str, A
                     "product_page": catalog_entry["product_url"],
                     "holdings_url": catalog_entry["holdings_url"],
                     "issuer": catalog_entry["issuer_key"],
+                    "is_supported": catalog_entry["support_status"] == "supported",
+                    "support_status": catalog_entry["support_status"],
+                    "support_reason_code": catalog_entry["support_reason_code"],
+                    "support_error_detail": catalog_entry["support_error_detail"],
                 }
             )
+            if catalog_entry["support_status"] != "supported":
+                resolved_entry["error"] = (
+                    f'Unsupported ETF: "{catalog_entry["display_name"]}" '
+                    f'({catalog_entry["support_reason_code"]}).'
+                )
         resolved_entries.append(resolved_entry)
     return resolved_entries
 

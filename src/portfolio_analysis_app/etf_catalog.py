@@ -25,7 +25,22 @@ REQUIRED_CATALOG_FIELDS = {
     "product_url",
     "holdings_url",
     "search_text",
+    "support_status",
+    "support_reason_code",
+    "support_error_detail",
 }
+
+
+def _validate_support_fields(entry: dict[str, Any], index: int) -> None:
+    status = str(entry["support_status"]).strip()
+    reason_code = str(entry["support_reason_code"]).strip()
+
+    if status not in {"supported", "unsupported"}:
+        raise ValueError(f'ETF catalogue entry {index} has invalid support_status: "{status}".')
+    if status == "supported" and reason_code:
+        raise ValueError(f'ETF catalogue entry {index} is supported but has a support_reason_code: "{reason_code}".')
+    if status == "unsupported" and not reason_code:
+        raise ValueError(f"ETF catalogue entry {index} is unsupported but missing support_reason_code.")
 
 
 def load_etf_catalog(catalog_path: Path | str = DEFAULT_ETF_CATALOG_PATH) -> list[dict[str, Any]]:
@@ -57,6 +72,9 @@ def load_etf_catalog(catalog_path: Path | str = DEFAULT_ETF_CATALOG_PATH) -> lis
             "product_url": str(raw_entry["product_url"]).strip(),
             "holdings_url": str(raw_entry["holdings_url"]).strip(),
             "search_text": re.sub(r"\s+", " ", str(raw_entry["search_text"]).strip().casefold()),
+            "support_status": str(raw_entry["support_status"]).strip(),
+            "support_reason_code": str(raw_entry["support_reason_code"]).strip(),
+            "support_error_detail": str(raw_entry["support_error_detail"]).strip(),
         }
         if not entry["etf_id"]:
             raise ValueError(f"ETF catalogue entry {index} has an empty etf_id.")
@@ -64,6 +82,7 @@ def load_etf_catalog(catalog_path: Path | str = DEFAULT_ETF_CATALOG_PATH) -> lis
             raise ValueError(f'Duplicate ETF catalogue etf_id: "{entry["etf_id"]}".')
         if entry["isin"] in seen_isins:
             raise ValueError(f'Duplicate ETF catalogue ISIN: "{entry["isin"]}".')
+        _validate_support_fields(entry, index)
 
         seen_ids.add(entry["etf_id"])
         seen_isins.add(entry["isin"])
@@ -119,6 +138,8 @@ def build_catalog_dataframe(
             "isin": entry["isin"],
             "display_name": entry["display_name"],
             "asset_class": entry["asset_class"],
+            "support_status": entry["support_status"],
+            "support_reason_code": entry["support_reason_code"],
             "cached_snapshot": _find_latest_snapshot_label(entry["symbol"], data_path),
         }
         for entry in entries

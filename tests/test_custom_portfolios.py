@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.portfolio_analysis_app.custom_portfolios import (
     DEFAULT_PORTFOLIO_NAME,
@@ -14,6 +15,25 @@ from src.portfolio_analysis_app.custom_portfolios import (
 
 
 class SavedPortfolioTests(unittest.TestCase):
+    @staticmethod
+    def _catalog_entry(**overrides: object) -> dict[str, object]:
+        entry: dict[str, object] = {
+            "etf_id": "ishares-swda-ie00b4l5y983",
+            "issuer_key": "ishares",
+            "symbol": "SWDA",
+            "isin": "IE00B4L5Y983",
+            "display_name": "iShares Core MSCI World UCITS ETF",
+            "asset_class": "Equity",
+            "product_url": "https://example.test/swda",
+            "holdings_url": "https://example.test/swda.csv",
+            "search_text": "swda ie00b4l5y983 ishares core msci world ucits etf",
+            "support_status": "supported",
+            "support_reason_code": "",
+            "support_error_detail": "",
+        }
+        entry.update(overrides)
+        return entry
+
     def test_load_saved_portfolios_returns_default_portfolio_when_file_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             portfolios = load_saved_portfolios(Path(tmpdir))
@@ -101,6 +121,39 @@ class SavedPortfolioTests(unittest.TestCase):
 
         self.assertEqual([entry["symbol"] for entry in resolved], ["SWDA", "EMIM"])
         self.assertEqual([entry["isin"] for entry in resolved], ["IE00B4L5Y983", "IE00BKM4GZ66"])
+
+    def test_resolve_portfolio_entries_marks_unsupported_catalog_rows(self) -> None:
+        catalog = [
+            self._catalog_entry(
+                etf_id="ishares-bad-ie00badbad01",
+                symbol="BAD",
+                isin="IE00BADBAD01",
+                display_name="Broken ETF",
+                product_url="https://example.test/bad",
+                holdings_url="",
+                search_text="bad ie00badbad01 broken etf",
+                support_status="unsupported",
+                support_reason_code="parse_failed",
+                support_error_detail="Unable to parse holdings CSV.",
+            )
+        ]
+
+        with patch("src.portfolio_analysis_app.custom_portfolios.load_etf_catalog", return_value=catalog):
+            resolved = resolve_portfolio_entries(
+                [{"etf_id": "ishares-bad-ie00badbad01", "weight_pct": 100.0, "search_text": "Broken ETF"}]
+            )
+
+        self.assertEqual(resolved[0]["support_status"], "unsupported")
+        self.assertEqual(resolved[0]["support_reason_code"], "parse_failed")
+        self.assertIn("unsupported", resolved[0]["error"].lower())
+
+    def test_validate_portfolio_entries_accepts_shape_before_resolution_blocks_analysis(self) -> None:
+        validation = validate_portfolio_entries(
+            [{"etf_id": "ishares-bad-ie00badbad01", "weight_pct": 100.0, "search_text": "Broken ETF"}]
+        )
+
+        self.assertTrue(validation["is_valid"])
+        self.assertEqual(validation["total_weight_pct"], 100.0)
 
     def test_build_combined_holdings_for_portfolio_uses_latest_cached_holdings(self) -> None:
         entries = resolve_portfolio_entries(

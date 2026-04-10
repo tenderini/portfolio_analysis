@@ -8,7 +8,10 @@
     "asset_class": "Equity",
     "product_url": "https://www.blackrock.com/uk/individual/products/264659/ishares-msci-emerging-markets-imi-ucits-etf",
     "holdings_url": "https://www.blackrock.com/uk/individual/products/264659/ishares-msci-emerging-markets-imi-ucits-etf/uk/individual/products/264659/ishares-msci-emerging-markets-imi-ucits-etf/1472631233320.ajax?fileType=csv&fileName=EIMI_holdings&dataType=fund",
-    "search_text": "emim ie00bkm4gz66 ishares core msci emerging markets imi ucits etf"
+    "search_text": "emim ie00bkm4gz66 ishares core msci emerging markets imi ucits etf",
+    "support_status": "supported",
+    "support_reason_code": "",
+    "support_error_detail": ""
   },
   {
     "etf_id": "ishares-swda-ie00b4l5y983",
@@ -19,7 +22,10 @@
     "asset_class": "Equity",
     "product_url": "https://www.blackrock.com/uk/individual/products/251882/ishares-msci-world-ucits-etf-acc-fund",
     "holdings_url": "https://www.blackrock.com/uk/individual/products/251882/ishares-msci-world-ucits-etf-acc-fund/uk/individual/products/251882/ishares-msci-world-ucits-etf-acc-fund/1472631233320.ajax?fileType=csv&fileName=SWDA_holdings&dataType=fund",
-    "search_text": "swda ie00b4l5y983 ishares core msci world ucits etf"
+    "search_text": "swda ie00b4l5y983 ishares core msci world ucits etf",
+    "support_status": "supported",
+    "support_reason_code": "",
+    "support_error_detail": ""
   },
   {
     "etf_id": "ishares-wsml-ie00bf4rfh31",
@@ -30,6 +36,9 @@
     "asset_class": "Equity",
     "product_url": "https://www.blackrock.com/uk/individual/products/296576/ishares-msci-world-small-cap-ucits-etf",
     "holdings_url": "https://www.blackrock.com/uk/individual/products/296576/ishares-msci-world-small-cap-ucits-etf/uk/individual/products/296576/fund/1472631233320.ajax?fileType=csv&fileName=WSML_holdings&dataType=fund",
-    "search_text": "wsml ie00bf4rfh31 ishares msci world small cap ucits etf"
+    "search_text": "wsml ie00bf4rfh31 ishares msci world small cap ucits etf",
+    "support_status": "supported",
+    "support_reason_code": "",
+    "support_error_detail": ""
   }
 ]
