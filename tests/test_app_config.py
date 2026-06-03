@@ -12,6 +12,10 @@ class AppConfigTests(unittest.TestCase):
         self.assertFalse(config.ui.show_portfolio_total_in_overview)
         self.assertEqual(config.content.page_title, DEFAULT_CONFIG.content.page_title)
         self.assertEqual(config.content.dashboard_title, DEFAULT_CONFIG.content.dashboard_title)
+        self.assertEqual(
+            config.catalog.discovery_candidate_limit,
+            DEFAULT_CONFIG.catalog.discovery_candidate_limit,
+        )
 
     def test_load_app_config_reads_values_from_toml(self) -> None:
         from src.portfolio_analysis_app.app_config import load_app_config
@@ -28,6 +32,9 @@ class AppConfigTests(unittest.TestCase):
                     'page_title = "Custom Title"',
                     'dashboard_title = "Custom Dashboard"',
                     'snapshot_description_template = "Snapshot {snapshot_date} custom"',
+                    "",
+                    "[catalog]",
+                    "discovery_candidate_limit = 25",
                 ]
             ),
             encoding="utf-8",
@@ -44,3 +51,23 @@ class AppConfigTests(unittest.TestCase):
             config.content.snapshot_description_template,
             "Snapshot {snapshot_date} custom",
         )
+        self.assertEqual(config.catalog.discovery_candidate_limit, 25)
+
+    def test_load_app_config_allows_unlimited_catalog_discovery(self) -> None:
+        from src.portfolio_analysis_app.app_config import load_app_config
+
+        fixture = Path("tests/tmp_unlimited_catalog_config.toml")
+        fixture.write_text(
+            "\n".join(
+                [
+                    "[catalog]",
+                    'discovery_candidate_limit = "unlimited"',
+                ]
+            ),
+            encoding="utf-8",
+        )
+        self.addCleanup(lambda: fixture.unlink(missing_ok=True))
+
+        config = load_app_config(fixture)
+
+        self.assertIsNone(config.catalog.discovery_candidate_limit)

@@ -27,10 +27,9 @@ if __package__ in {None, ""}:
     from src.portfolio_analysis_app.custom_portfolios import (
         DEFAULT_PORTFOLIO_NAME,
         build_combined_holdings_for_portfolio,
-        load_saved_portfolios,
+        get_default_saved_portfolios,
         refresh_supported_etf_snapshot,
         resolve_portfolio_entries,
-        save_saved_portfolios,
         validate_portfolio_entries,
     )
     from src.portfolio_analysis_app.etf_catalog import (
@@ -59,10 +58,9 @@ else:
     from .custom_portfolios import (
         DEFAULT_PORTFOLIO_NAME,
         build_combined_holdings_for_portfolio,
-        load_saved_portfolios,
+        get_default_saved_portfolios,
         refresh_supported_etf_snapshot,
         resolve_portfolio_entries,
-        save_saved_portfolios,
         validate_portfolio_entries,
     )
     from .etf_catalog import (
@@ -85,6 +83,7 @@ except ImportError:  # pragma: no cover - optional dependency
 
 
 PLOTLY_STATIC_CONFIG = {"staticPlot": True, "displayModeBar": False}
+CATALOGUE_PAGE_SIZE = 100
 
 
 def render_bar_chart(data: pd.DataFrame, label_column: str, title: str, top_n: int) -> None:
@@ -326,35 +325,6 @@ def _set_portfolio_editor_state(portfolio: dict[str, Any]) -> None:
     )
 
 
-def _upsert_saved_portfolio(
-    saved_portfolios: list[dict[str, Any]],
-    portfolio_name: str,
-    entries: list[dict[str, Any]],
-    selected_name: str,
-) -> list[dict[str, Any]]:
-    cleaned_name = portfolio_name.strip() or selected_name or DEFAULT_PORTFOLIO_NAME
-    updated_portfolio = {
-        "name": cleaned_name,
-        "entries": _normalise_portfolio_entries(entries),
-    }
-
-    updated_portfolios: list[dict[str, Any]] = []
-    replaced = False
-    for portfolio in saved_portfolios:
-        if str(portfolio.get("name")) == selected_name:
-            updated_portfolios.append(updated_portfolio)
-            replaced = True
-            continue
-
-        if str(portfolio.get("name")) == cleaned_name and cleaned_name != selected_name:
-            raise ValueError(f'A saved portfolio named "{cleaned_name}" already exists.')
-        updated_portfolios.append(portfolio)
-
-    if not replaced:
-        updated_portfolios.append(updated_portfolio)
-    return updated_portfolios
-
-
 def _render_catalogue_match_picker(
     row_index: int,
     entry: dict[str, Any],
@@ -394,35 +364,21 @@ def _render_catalogue_match_picker(
 
 
 def _render_portfolio_builder(
-    saved_portfolios: list[dict[str, Any]],
+    portfolio: dict[str, Any],
     catalog: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    if not saved_portfolios:
-        st.error("No saved portfolios are available.")
-        st.stop()
+    if "selected_portfolio_name" not in st.session_state:
+        _set_portfolio_editor_state(portfolio)
 
-    portfolios_by_name = {str(portfolio["name"]): portfolio for portfolio in saved_portfolios}
-    if (
-        "selected_portfolio_name" not in st.session_state
-        or st.session_state["selected_portfolio_name"] not in portfolios_by_name
-    ):
-        _set_portfolio_editor_state(saved_portfolios[0])
-
-    portfolio_names = list(portfolios_by_name)
     current_name = str(st.session_state["selected_portfolio_name"])
-    current_index = portfolio_names.index(current_name)
+    portfolio_name = st.text_input(
+        "Portfolio name",
+        value=str(st.session_state.get("portfolio_editor_name", current_name)),
+    )
+    st.session_state["portfolio_editor_name"] = portfolio_name
 
     with st.expander("Portfolio Builder", expanded=True):
-        selected_name = st.selectbox("Saved portfolio", options=portfolio_names, index=current_index)
-        if selected_name != current_name:
-            _set_portfolio_editor_state(portfolios_by_name[selected_name])
-            current_name = selected_name
-
-        portfolio_name = st.text_input(
-            "Portfolio name",
-            value=str(st.session_state.get("portfolio_editor_name", current_name)),
-        )
-        st.session_state["portfolio_editor_name"] = portfolio_name
+        st.info("Portfolio changes are session-only and are not saved to disk in this deployment.")
 
         editor_entries = _normalise_portfolio_entries(
             list(st.session_state.get("portfolio_editor_entries", []))
@@ -454,29 +410,6 @@ def _render_portfolio_builder(
             rendered_entries.pop(remove_index)
 
         st.session_state["portfolio_editor_entries"] = _normalise_portfolio_entries(rendered_entries)
-
-        if st.button("Save portfolio"):
-            try:
-                updated_portfolios = _upsert_saved_portfolio(
-                    saved_portfolios=saved_portfolios,
-                    portfolio_name=portfolio_name,
-                    entries=rendered_entries,
-                    selected_name=current_name,
-                )
-            except ValueError as exc:
-                st.error(str(exc))
-            else:
-                save_saved_portfolios(updated_portfolios)
-                _set_portfolio_editor_state(
-                    next(
-                        portfolio
-                        for portfolio in updated_portfolios
-                        if portfolio["name"] == (portfolio_name.strip() or current_name or DEFAULT_PORTFOLIO_NAME)
-                    )
-                )
-                saved_portfolios[:] = updated_portfolios
-                portfolios_by_name = {str(portfolio["name"]): portfolio for portfolio in saved_portfolios}
-                st.success("Portfolio saved.")
 
         resolved_entries = resolve_portfolio_entries(st.session_state["portfolio_editor_entries"])
         validation = validate_portfolio_entries(st.session_state["portfolio_editor_entries"])
@@ -521,8 +454,11 @@ def main() -> None:
     top_n = app_config.ui.top_n
     company_search = ""
     catalog = load_etf_catalog()
-    saved_portfolios = load_saved_portfolios()
-    builder_state = _render_portfolio_builder(saved_portfolios, catalog)
+    supported_catalog = [
+        entry for entry in catalog if str(entry.get("support_status", "supported")) == "supported"
+    ]
+    default_portfolio = get_default_saved_portfolios()[0]
+    builder_state = _render_portfolio_builder(default_portfolio, supported_catalog)
 
     if not builder_state["validation"]["is_valid"]:
         for error in builder_state["validation"]["errors"]:
@@ -786,10 +722,31 @@ def main() -> None:
                 render_weight_table(section_data, label_column, height=360)
 
     with catalogue_tab:
-        st.subheader("Supported ETF Catalogue")
+        st.subheader("ETF Catalogue")
         catalogue_search = st.text_input("Catalogue search", value="")
+        catalogue_matches = search_etf_catalog(
+            catalogue_search,
+            catalog,
+            limit=max(len(catalog), 1),
+        )
+        total_matches = len(catalogue_matches)
+        total_pages = max((total_matches - 1) // CATALOGUE_PAGE_SIZE + 1, 1)
+        selected_page = 1
+        if total_pages > 1:
+            selected_page = st.selectbox(
+                "Catalogue page",
+                options=list(range(1, total_pages + 1)),
+                index=0,
+            )
+        start_index = (selected_page - 1) * CATALOGUE_PAGE_SIZE
+        end_index = min(start_index + CATALOGUE_PAGE_SIZE, total_matches)
+        if total_matches:
+            st.caption(f"Showing {start_index + 1}-{end_index} of {total_matches} ETFs")
+        else:
+            st.caption("No ETFs match the current search.")
+
         catalogue_df = build_catalog_dataframe(
-            search_etf_catalog(catalogue_search, catalog),
+            catalogue_matches[start_index:end_index],
             data_dir=Path("data"),
         )
         st.dataframe(

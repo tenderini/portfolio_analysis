@@ -2,7 +2,7 @@
 data_retrival.py
 
 Fetch iShares ETF holdings + compute exposures (company / country / sector)
-for a 3-ETF Pie (SWDA, EMIM, WSML/WLDS) using Playwright to bypass
+for a 3-ETF Pie (SWDA, EIMI, WSML/WLDS) using Playwright to bypass
 JS/consent gating and 403s on the CSV endpoint.
 
 How to run (macOS):
@@ -35,6 +35,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Tuple, Optional
+from urllib.parse import urljoin
 
 import pandas as pd
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
@@ -94,7 +95,7 @@ ETF_CONFIG = [
         pie_weight=0.78,
     ),
     ETF(
-        symbol="EMIM",
+        symbol="EIMI",
         isin="IE00BKM4GZ66",
         product_page="https://www.blackrock.com/uk/individual/products/264659/ishares-msci-emerging-markets-imi-ucits-etf",
         pie_weight=0.12,
@@ -230,7 +231,7 @@ def extract_holdings_csv_url(product_page_url: str, rendered_html: str) -> str:
         if c.startswith("http"):
             abs_candidates.append(c)
         else:
-            abs_candidates.append(product_page_url.rstrip("/") + c if c.startswith("/") else product_page_url.rstrip("/") + "/" + c)
+            abs_candidates.append(urljoin(product_page_url, c))
 
     # Rank candidates: prefer those whose query includes holdings
     def score(u: str) -> int:

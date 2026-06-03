@@ -1,22 +1,95 @@
 from __future__ import annotations
 
+import html as html_lib
 import json
+import logging
 import re
+import sys
+import time
+from time import perf_counter
 from collections import Counter
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urljoin
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
-from .data_retrival import (
-    close_playwright,
-    fetch_rendered_html_and_request_ctx,
-    fetch_standardised_holdings_snapshot,
+if __package__ in {None, ""}:
+    repo_root = Path(__file__).resolve().parents[2]
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
+    from src.portfolio_analysis_app.app_config import load_app_config
+    from src.portfolio_analysis_app.data_retrival import (
+        HEADERS_UA,
+        accept_cookies_best_effort,
+        close_playwright,
+        fetch_rendered_html_and_request_ctx,
+        fetch_standardised_holdings_snapshot,
+    )
+    from src.portfolio_analysis_app.etf_catalog import DEFAULT_ETF_CATALOG_PATH, load_etf_catalog
+else:
+    from .app_config import load_app_config
+    from .data_retrival import (
+        HEADERS_UA,
+        accept_cookies_best_effort,
+        close_playwright,
+        fetch_rendered_html_and_request_ctx,
+        fetch_standardised_holdings_snapshot,
+    )
+    from .etf_catalog import DEFAULT_ETF_CATALOG_PATH, load_etf_catalog
+
+from playwright.sync_api import sync_playwright
+
+
+DISCOVERY_URL_TEMPLATE = (
+    "https://www.ishares.com/uk/individual/en/products/etf-investments"
+    "?switchLocale=y&siteEntryPassthrough=true"
+    "#/?productView=etf&pageNumber={page_number}&sortColumn=totalFundSizeInMillions"
+    "&sortDirection=desc&dataView=keyFacts&keyFacts=all"
 )
-from .etf_catalog import DEFAULT_ETF_CATALOG_PATH, load_etf_catalog
-
-
-DISCOVERY_URL = "https://www.ishares.com/uk/individual/en/products/product-list"
 DISCOVERY_BASE_URL = "https://www.ishares.com"
+MAX_DISCOVERY_PAGES = 2
+DISCOVERY_CANDIDATE_LIMIT = None
+PRODUCT_URL_PATTERN = re.compile(
+    r'(?P<product_url>(?:https?://www\.ishares\.com)?/uk/individual/en/products/[^"\'\\<>\s]+)',
+    re.IGNORECASE,
+)
+DISCOVERY_TABLE_ROW_PATTERN = re.compile(
+    r'<tr>\s*'
+    r'<td class="links"><a href="(?P<product_url>/uk/individual/en/products/[^"]+)">(?P<symbol>[^<]+)</a></td>\s*'
+    r'<td class="links"><a href="/uk/individual/en/products/[^"]+">(?P<display_name>[^<]+)</a></td>'
+    r'(?P<rest>.*?)</tr>',
+    re.IGNORECASE | re.DOTALL,
+)
+DATA_PRODUCT_PATTERN = re.compile(
+    r'data-product-ticker="(?P<symbol>[^"]+)".*?data-product-isin="(?P<isin>[^"]+)".*?href="(?P<product_url>/[^"]+)"',
+    re.IGNORECASE | re.DOTALL,
+)
+DISCOVERY_TEXT_LINK_PATTERN = re.compile(
+    r'<a[^>]+href="(?P<product_url>/[^"]*/products/[^"]+)"[^>]*>\s*Explore\s+(?P<symbol>[A-Z0-9._-]+)\s+on\s+the\s+product\s+page',
+    re.IGNORECASE | re.DOTALL,
+)
+SYMBOL_KEY_PATTERN = re.compile(
+    r'"(?:ticker|localExchangeTicker|productTicker|exchangeTicker|symbol)"\s*:\s*"(?P<symbol>[A-Z0-9._-]{2,})"',
+    re.IGNORECASE,
+)
+ISIN_KEY_PATTERN = re.compile(
+    r'"(?:isin|productIsin)"\s*:\s*"(?P<isin>[A-Z0-9]{12})"',
+    re.IGNORECASE,
+)
+DISPLAY_NAME_KEY_PATTERN = re.compile(
+    r'"(?:displayName|productName|fundName|name)"\s*:\s*"(?P<display_name>(?:\\.|[^"])*)"',
+    re.IGNORECASE,
+)
+ASSET_CLASS_KEY_PATTERN = re.compile(
+    r'"(?:assetClass|asset_class)"\s*:\s*"(?P<asset_class>(?:\\.|[^"])*)"',
+    re.IGNORECASE,
+)
+TEXT_ISIN_PATTERN = re.compile(r"\bISIN\b\s+([A-Z]{2}[A-Z0-9]{10})\b", re.IGNORECASE)
+KNOWN_ASSET_CLASSES = ("Equity", "Fixed Income", "Commodity", "Multi Asset", "Real Estate")
+LOGGER = logging.getLogger(__name__)
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+CATALOG_CHECKPOINT_VERSION = 1
+CATALOG_CHECKPOINT_PATH = DEFAULT_ETF_CATALOG_PATH.with_name("etf_catalog.checkpoint.json")
 
 
 def normalise_catalog_candidate(candidate: dict[str, Any]) -> dict[str, str]:
@@ -24,7 +97,7 @@ def normalise_catalog_candidate(candidate: dict[str, Any]) -> dict[str, str]:
     isin = str(candidate.get("isin", "")).strip().upper()
     display_name = str(candidate.get("display_name", "")).strip()
     asset_class = str(candidate.get("asset_class", "")).strip() or "Unknown"
-    product_url = str(candidate.get("product_url", "")).strip()
+    product_url = _normalise_product_url(str(candidate.get("product_url", "")).strip())
     holdings_url = str(candidate.get("holdings_url", "")).strip()
     etf_id = f"ishares-{symbol.lower()}-{isin.lower()}"
     search_text = " ".join(
@@ -40,80 +113,423 @@ def normalise_catalog_candidate(candidate: dict[str, Any]) -> dict[str, str]:
         "product_url": product_url,
         "holdings_url": holdings_url,
         "search_text": re.sub(r"\s+", " ", search_text),
+        "support_status": str(candidate.get("support_status", "")).strip(),
+        "support_reason_code": str(candidate.get("support_reason_code", "")).strip(),
+        "support_error_detail": str(candidate.get("support_error_detail", "")).strip(),
+    }
+
+
+def build_catalog_report(
+    discovered: int,
+    catalog: list[dict[str, Any]],
+    used_fallback: bool,
+    extra_reason_counts: Counter[str] | None = None,
+) -> dict[str, Any]:
+    if extra_reason_counts is None:
+        reason_counts = Counter(
+            entry["support_reason_code"]
+            for entry in catalog
+            if entry.get("support_status") == "unsupported" and entry.get("support_reason_code")
+        )
+    else:
+        reason_counts = Counter(extra_reason_counts)
+
+    supported_count = sum(1 for entry in catalog if entry.get("support_status") == "supported")
+    return {
+        "discovered": discovered,
+        "supported": supported_count,
+        "unsupported": max(discovered - supported_count, 0),
+        "used_fallback": used_fallback,
+        "reason_counts": dict(reason_counts),
     }
 
 
 def build_supported_catalog(
     candidates: list[dict[str, Any]],
-    validator: Callable[[dict[str, Any]], tuple[bool, str]] | None = None,
+    validator: Callable[[dict[str, Any]], tuple[bool, str, str]] | None = None,
+    used_fallback: bool = False,
 ) -> tuple[list[dict[str, str]], dict[str, Any]]:
     validate = validator or _validate_candidate_support
-    accepted: list[dict[str, str]] = []
-    rejected = Counter()
+    catalog: list[dict[str, str]] = []
+    reason_counts: Counter[str] = Counter()
     seen_isins: set[str] = set()
+    total_candidates = len(candidates)
 
-    for raw_candidate in candidates:
+    LOGGER.info("Validating support for %s ETF candidates", total_candidates)
+
+    for index, raw_candidate in enumerate(candidates, start=1):
         candidate = normalise_catalog_candidate(raw_candidate)
+        candidate_label = candidate["symbol"] or candidate["display_name"] or candidate["product_url"]
         if not candidate["isin"]:
-            rejected["missing_isin"] += 1
+            reason_counts["missing_isin"] += 1
+            LOGGER.info(
+                "Skipping candidate %s/%s (%s): missing ISIN",
+                index,
+                total_candidates,
+                candidate_label,
+            )
             continue
         if candidate["isin"] in seen_isins:
-            rejected["duplicate_isin"] += 1
+            reason_counts["duplicate_isin"] += 1
+            LOGGER.info(
+                "Skipping candidate %s/%s (%s): duplicate ISIN %s",
+                index,
+                total_candidates,
+                candidate_label,
+                candidate["isin"],
+            )
             continue
-
-        is_supported, reason = validate(candidate)
-        if not is_supported:
-            rejected[reason or "validation_failed"] += 1
-            continue
-
         seen_isins.add(candidate["isin"])
-        accepted.append(candidate)
 
-    accepted.sort(key=lambda entry: (entry["display_name"], entry["symbol"]))
-    return accepted, {
-        "discovered": len(candidates),
-        "accepted": len(accepted),
-        "rejected": dict(rejected),
-    }
+        validation_started_at = perf_counter()
+        is_supported, reason_code, error_detail = validate(candidate)
+        validation_elapsed = _format_elapsed(perf_counter() - validation_started_at)
+        candidate["support_status"] = "supported" if is_supported else "unsupported"
+        candidate["support_reason_code"] = reason_code
+        candidate["support_error_detail"] = error_detail
+        if not is_supported:
+            reason_counts[reason_code or "validation_failed"] += 1
+
+        catalog.append(candidate)
+        status_label = "supported" if is_supported else f"unsupported ({reason_code or 'validation_failed'})"
+        LOGGER.info(
+            "Validated candidate %s/%s (%s) in %s: %s",
+            index,
+            total_candidates,
+            candidate_label,
+            validation_elapsed,
+            status_label,
+        )
+
+    catalog.sort(key=lambda entry: (entry["display_name"], entry["symbol"]))
+    LOGGER.info("Finished validating ETF candidates")
+    return catalog, build_catalog_report(
+        discovered=len(candidates),
+        catalog=catalog,
+        used_fallback=used_fallback,
+        extra_reason_counts=reason_counts,
+    )
 
 
 def write_catalog(
     catalog: list[dict[str, str]],
     output_path: Path | str = DEFAULT_ETF_CATALOG_PATH,
 ) -> None:
+    started_at = perf_counter()
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     ordered = sorted(catalog, key=lambda entry: (entry["display_name"], entry["symbol"]))
     path.write_text(json.dumps(ordered, indent=2) + "\n", encoding="utf-8")
+    LOGGER.info(
+        "Wrote %s ETF catalog entries to %s in %s",
+        len(ordered),
+        path,
+        _format_elapsed(perf_counter() - started_at),
+    )
 
 
-def discover_ishares_candidates() -> list[dict[str, str]]:
-    html, _, context, browser, playwright_instance = fetch_rendered_html_and_request_ctx(DISCOVERY_URL)
+def _load_catalog_checkpoint(
+    checkpoint_path: Path = CATALOG_CHECKPOINT_PATH,
+) -> list[dict[str, Any]]:
+    path = Path(checkpoint_path)
+    if not path.exists():
+        return []
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    rows = payload.get("completed_rows", [])
+    return rows if isinstance(rows, list) else []
+
+
+def _write_catalog_checkpoint(
+    completed_rows: list[dict[str, Any]],
+    discovered_count: int,
+    checkpoint_path: Path = CATALOG_CHECKPOINT_PATH,
+) -> None:
+    path = Path(checkpoint_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "version": CATALOG_CHECKPOINT_VERSION,
+        "discovered_count": discovered_count,
+        "completed_rows": completed_rows,
+    }
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _clear_catalog_checkpoint(checkpoint_path: Path = CATALOG_CHECKPOINT_PATH) -> None:
+    Path(checkpoint_path).unlink(missing_ok=True)
+
+
+def _candidate_resume_key(candidate: dict[str, Any]) -> str:
+    return _normalise_product_url(str(candidate.get("product_url", "")).strip())
+
+
+def _candidate_identity_keys(candidate: dict[str, Any]) -> set[str]:
+    keys: set[str] = set()
+
+    etf_id = str(candidate.get("etf_id", "")).strip().casefold()
+    if etf_id:
+        keys.add(f"etf_id:{etf_id}")
+
+    isin = str(candidate.get("isin", "")).strip().upper()
+    if isin:
+        keys.add(f"isin:{isin}")
+
+    symbol = str(candidate.get("symbol", "")).strip().upper()
+    display_name = re.sub(r"\s+", " ", str(candidate.get("display_name", "")).strip().casefold())
+    if symbol and display_name:
+        keys.add(f"symbol_display:{symbol}|{display_name}")
+
+    product_url = _candidate_resume_key(candidate)
+    if product_url:
+        keys.add(f"product_url:{product_url}")
+
+    return keys
+
+
+def _find_matching_row_index(rows: list[dict[str, Any]], candidate: dict[str, Any]) -> int | None:
+    candidate_keys = _candidate_identity_keys(candidate)
+    if not candidate_keys:
+        return None
+
+    for index, row in enumerate(rows):
+        if candidate_keys.intersection(_candidate_identity_keys(row)):
+            return index
+    return None
+
+
+def _catalog_row_quality(row: dict[str, Any]) -> tuple[bool, bool, bool, bool]:
+    product_url = _candidate_resume_key(row)
+    return (
+        str(row.get("support_status", "")).strip() == "supported",
+        bool(str(row.get("holdings_url", "")).strip()),
+        "ishares.com" in product_url,
+        bool(str(row.get("isin", "")).strip()),
+    )
+
+
+def _prefer_catalog_row(existing_row: dict[str, Any], candidate_row: dict[str, Any]) -> dict[str, Any]:
+    if _catalog_row_quality(candidate_row) >= _catalog_row_quality(existing_row):
+        return candidate_row
+    return existing_row
+
+
+def _merge_catalog_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged_rows: list[dict[str, Any]] = []
+    for row in rows:
+        existing_index = _find_matching_row_index(merged_rows, row)
+        if existing_index is None:
+            merged_rows.append(row)
+            continue
+        merged_rows[existing_index] = _prefer_catalog_row(merged_rows[existing_index], row)
+    return merged_rows
+
+
+def _candidate_progress_label(candidate: dict[str, Any]) -> tuple[str, str]:
+    symbol = str(candidate.get("symbol", "")).strip().upper() or "UNKNOWN"
+    display_name = str(candidate.get("display_name", "")).strip() or str(candidate.get("product_url", "")).strip()
+    return symbol, display_name
+
+
+def _log_processing_queue(candidates: list[dict[str, Any]]) -> None:
+    total = len(candidates)
+    LOGGER.info("Queued %s ETF candidates for processing", total)
+    for index, candidate in enumerate(candidates, start=1):
+        symbol, display_name = _candidate_progress_label(candidate)
+        LOGGER.info("Queue: %s/%s %s - %s", index, total, symbol, display_name)
+
+
+def _enrich_candidate_with_retry(candidate: dict[str, str], attempts: int = 3) -> dict[str, str]:
+    last_error: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return _enrich_candidate_identity(candidate)
+        except Exception as exc:
+            last_error = exc
+            LOGGER.warning(
+                "Enrichment attempt %s/%s failed for %s: %s",
+                attempt,
+                attempts,
+                candidate.get("product_url", ""),
+                exc,
+            )
+            if attempt < attempts:
+                time.sleep(min(attempt * 0.1, 0.3))
+
+    if last_error is None:
+        raise RuntimeError("Enrichment retry loop exited without error")
+    raise last_error
+
+
+def _process_catalog_candidate(candidate: dict[str, str]) -> dict[str, str]:
+    normalized = normalise_catalog_candidate(candidate)
     try:
-        pattern = re.compile(
-            r'data-product-ticker="(?P<symbol>[^"]+)".*?data-product-isin="(?P<isin>[^"]+)".*?href="(?P<product_url>/[^"]+)"',
-            re.IGNORECASE | re.DOTALL,
-        )
-        candidates: dict[tuple[str, str], dict[str, str]] = {}
-        for match in pattern.finditer(html):
-            symbol = match.group("symbol").strip().upper()
-            isin = match.group("isin").strip().upper()
-            product_url = urljoin(DISCOVERY_BASE_URL, match.group("product_url").strip())
-            candidates[(symbol, isin)] = {
-                "symbol": symbol,
-                "isin": isin,
-                "display_name": symbol,
-                "asset_class": "Unknown",
-                "product_url": product_url,
-                "holdings_url": "",
-            }
-        if candidates:
-            return sorted(candidates.values(), key=lambda entry: (entry["symbol"], entry["isin"]))
+        enriched = _enrich_candidate_with_retry(dict(candidate))
+        normalized = normalise_catalog_candidate(enriched)
+        is_supported, reason_code, error_detail = _validate_candidate_support(normalized)
+    except Exception as exc:
+        normalized["support_status"] = "unsupported"
+        normalized["support_reason_code"] = "fetch_failed"
+        normalized["support_error_detail"] = str(exc)
+        return normalized
 
-        # Fallback to the currently committed catalogue when the product-list markup changes.
-        fallback_catalog = load_etf_catalog(DEFAULT_ETF_CATALOG_PATH)
-        if fallback_catalog:
-            return [
+    normalized["support_status"] = "supported" if is_supported else "unsupported"
+    normalized["support_reason_code"] = reason_code
+    normalized["support_error_detail"] = error_detail
+    return normalized
+
+
+def _process_catalog_candidates(
+    candidates: list[dict[str, str]],
+    checkpoint_path: Path = CATALOG_CHECKPOINT_PATH,
+) -> list[dict[str, str]]:
+    completed_rows = _merge_catalog_rows(_load_catalog_checkpoint(checkpoint_path))
+    completed_resume_keys = {
+        resume_key for row in completed_rows if (resume_key := _candidate_resume_key(row))
+    }
+    total_candidates = len(candidates)
+    remaining_candidates = [
+        candidate
+        for candidate in candidates
+        if _candidate_resume_key(candidate) not in completed_resume_keys
+    ]
+    total_remaining = len(remaining_candidates)
+
+    if completed_rows:
+        LOGGER.info(
+            "Loaded checkpoint with %s completed ETFs; %s remaining",
+            len(completed_rows),
+            max(total_candidates - len(completed_rows), 0),
+        )
+
+    remaining_index = 0
+    for candidate in candidates:
+        resume_key = _candidate_resume_key(candidate)
+        if resume_key in completed_resume_keys:
+            continue
+
+        remaining_index += 1
+        overall_index = len(completed_rows) + 1
+        symbol, display_name = _candidate_progress_label(candidate)
+        LOGGER.info(
+            "Processing overall %s/%s, remaining %s/%s (%s): %s",
+            overall_index,
+            total_candidates,
+            remaining_index,
+            total_remaining,
+            symbol,
+            display_name,
+        )
+        completed_row = _process_catalog_candidate(candidate)
+        existing_index = _find_matching_row_index(completed_rows, completed_row)
+        if existing_index is None:
+            completed_rows.append(completed_row)
+        else:
+            completed_rows[existing_index] = _prefer_catalog_row(completed_rows[existing_index], completed_row)
+        completed_resume_keys.add(resume_key)
+        processed_resume_key = _candidate_resume_key(completed_row)
+        if processed_resume_key:
+            completed_resume_keys.add(processed_resume_key)
+        completed_symbol, _ = _candidate_progress_label(completed_row)
+        if completed_row.get("support_status") == "supported":
+            completion_status = "supported"
+        else:
+            completion_status = f"unsupported ({completed_row.get('support_reason_code', '').strip() or 'validation_failed'})"
+        LOGGER.info(
+            "Completed overall %s/%s, remaining %s/%s (%s): %s",
+            len(completed_rows),
+            total_candidates,
+            remaining_index,
+            total_remaining,
+            completed_symbol,
+            completion_status,
+        )
+        _write_catalog_checkpoint(
+            completed_rows=completed_rows,
+            discovered_count=len(candidates),
+            checkpoint_path=checkpoint_path,
+        )
+        LOGGER.info("Checkpoint saved with %s completed ETFs", len(completed_rows))
+
+    return sorted(completed_rows, key=lambda entry: (entry["display_name"], entry["symbol"]))
+
+
+def get_discovery_candidate_limit() -> int | None:
+    return load_app_config().catalog.discovery_candidate_limit
+
+
+def discover_ishares_candidates() -> tuple[list[dict[str, str]], bool]:
+    discovery_started_at = perf_counter()
+    discovered: dict[str, dict[str, str]] = {}
+    discovery_candidate_limit = get_discovery_candidate_limit()
+    LOGGER.info("Discovering iShares ETF candidates")
+    if discovery_candidate_limit is None:
+        LOGGER.info("Applying unlimited discovery candidate limit")
+    else:
+        LOGGER.info(
+            "Applying configured discovery limit: %s ETF candidates",
+            discovery_candidate_limit,
+        )
+    for page_number in range(1, MAX_DISCOVERY_PAGES + 1):
+        page_started_at = perf_counter()
+        html = _fetch_discovery_html(page_number)
+        LOGGER.info(
+            "Fetched discovery page %s/%s in %s",
+            page_number,
+            MAX_DISCOVERY_PAGES,
+            _format_elapsed(perf_counter() - page_started_at),
+        )
+        page_candidates = _extract_candidates_from_discovery_html(html)
+        for candidate in page_candidates:
+            discovered.setdefault(candidate["product_url"], candidate)
+            if (
+                discovery_candidate_limit is not None
+                and len(discovered) >= discovery_candidate_limit
+            ):
+                break
+        LOGGER.info(
+            "Page %s yielded %s raw candidates; %s unique candidates so far",
+            page_number,
+            len(page_candidates),
+            len(discovered),
+        )
+        if (
+            discovery_candidate_limit is not None
+            and len(discovered) >= discovery_candidate_limit
+        ):
+            LOGGER.info(
+                "Reached configured discovery limit of %s ETF candidates",
+                discovery_candidate_limit,
+            )
+            break
+        if page_number > 1 and not page_candidates:
+            LOGGER.info("Stopping discovery early after page %s returned no candidates", page_number)
+            break
+
+    unique_candidates = list(discovered.values())
+    if discovery_candidate_limit is not None:
+        unique_candidates = unique_candidates[:discovery_candidate_limit]
+    if unique_candidates:
+        _log_processing_queue(unique_candidates)
+        LOGGER.info(
+            "Discovered %s ETF candidates in %s",
+            len(unique_candidates),
+            _format_elapsed(perf_counter() - discovery_started_at),
+        )
+        return sorted(
+            unique_candidates,
+            key=lambda entry: (entry["symbol"], entry["isin"], entry["product_url"]),
+        ), False
+
+    # Fallback to the currently committed catalogue when the product-list markup changes.
+    fallback_catalog = load_etf_catalog(DEFAULT_ETF_CATALOG_PATH)
+    if fallback_catalog:
+        LOGGER.warning(
+            "Discovery returned no candidates after %s; falling back to existing catalog at %s",
+            _format_elapsed(perf_counter() - discovery_started_at),
+            DEFAULT_ETF_CATALOG_PATH,
+        )
+        return (
+            [
                 {
                     "symbol": entry["symbol"],
                     "isin": entry["isin"],
@@ -121,39 +537,265 @@ def discover_ishares_candidates() -> list[dict[str, str]]:
                     "asset_class": entry["asset_class"],
                     "product_url": entry["product_url"],
                     "holdings_url": entry["holdings_url"],
+                    "support_status": entry["support_status"],
+                    "support_reason_code": entry["support_reason_code"],
+                    "support_error_detail": entry["support_error_detail"],
                 }
                 for entry in fallback_catalog
-            ]
+            ],
+            True,
+        )
 
-        raise ValueError("No ETF candidates were discovered from the iShares product list page.")
+    LOGGER.error(
+        "Discovery returned no ETF candidates after %s and no fallback catalog was available",
+        _format_elapsed(perf_counter() - discovery_started_at),
+    )
+    raise ValueError("No ETF candidates were discovered from the iShares product list page.")
+
+
+def main() -> None:
+    configure_logging()
+    started_at = perf_counter()
+    LOGGER.info("Starting ETF catalog generation")
+    candidates, used_fallback = discover_ishares_candidates()
+    catalog = _process_catalog_candidates(candidates)
+    report = build_catalog_report(
+        discovered=len(candidates),
+        catalog=catalog,
+        used_fallback=used_fallback,
+    )
+    write_catalog(catalog, DEFAULT_ETF_CATALOG_PATH)
+    _clear_catalog_checkpoint()
+    LOGGER.info(
+        "ETF catalog generation finished in %s (%s supported, %s unsupported)",
+        _format_elapsed(perf_counter() - started_at),
+        report["supported"],
+        report["unsupported"],
+    )
+    print(json.dumps(report, indent=2))
+
+
+def configure_logging(level: int = logging.INFO) -> None:
+    if logging.getLogger().handlers:
+        logging.getLogger().setLevel(level)
+        return
+
+    logging.basicConfig(level=level, format=LOG_FORMAT, stream=sys.stderr)
+
+
+def _format_elapsed(seconds: float) -> str:
+    return f"{seconds:.2f}s"
+
+
+def _fetch_discovery_html(page_number: int) -> str:
+    playwright_instance = sync_playwright().start()
+    browser = playwright_instance.chromium.launch(headless=True)
+    context = browser.new_context(
+        locale="en-GB",
+        user_agent=HEADERS_UA,
+        viewport={"width": 1440, "height": 1800},
+    )
+    page = context.new_page()
+
+    try:
+        page.goto(
+            DISCOVERY_URL_TEMPLATE.format(page_number=page_number),
+            wait_until="domcontentloaded",
+            timeout=60000,
+        )
+        accept_cookies_best_effort(page)
+        page.wait_for_timeout(4500)
+
+        return page.content()
     finally:
         close_playwright(context, browser, playwright_instance)
 
 
-def main() -> None:
-    candidates = discover_ishares_candidates()
-    catalog, report = build_supported_catalog(candidates)
-    write_catalog(catalog, DEFAULT_ETF_CATALOG_PATH)
-    print(json.dumps(report, indent=2))
+def _extract_candidates_from_discovery_html(html: str) -> list[dict[str, str]]:
+    candidates: dict[str, dict[str, str]] = {}
+
+    for match in DISCOVERY_TABLE_ROW_PATTERN.finditer(html):
+        product_url = _normalise_product_url(
+            urljoin(DISCOVERY_BASE_URL, html_lib.unescape(match.group("product_url").strip()))
+        )
+        symbol = html_lib.unescape(match.group("symbol")).strip().upper()
+        display_name = html_lib.unescape(match.group("display_name")).strip()
+        key = f"{product_url}|{symbol}|"
+        candidates[key] = {
+            "symbol": symbol,
+            "isin": "",
+            "display_name": display_name,
+            "asset_class": "Unknown",
+            "product_url": product_url,
+            "holdings_url": "",
+        }
+
+    for match in DATA_PRODUCT_PATTERN.finditer(html):
+        product_url = _normalise_product_url(
+            urljoin(DISCOVERY_BASE_URL, html_lib.unescape(match.group("product_url").strip()))
+        )
+        symbol = match.group("symbol").strip().upper()
+        isin = match.group("isin").strip().upper()
+        key = f"{product_url}|{symbol}|{isin}"
+        candidates[key] = {
+            "symbol": symbol,
+            "isin": isin,
+            "display_name": symbol,
+            "asset_class": "Unknown",
+            "product_url": product_url,
+            "holdings_url": "",
+        }
+
+    for match in DISCOVERY_TEXT_LINK_PATTERN.finditer(html):
+        product_url = _normalise_product_url(
+            urljoin(DISCOVERY_BASE_URL, html_lib.unescape(match.group("product_url").strip()))
+        )
+        symbol = match.group("symbol").strip().upper()
+        context_window = html[max(0, match.start() - 800) : match.end() + 200]
+        display_name = _extract_display_name(context_window) or symbol
+        asset_class = _extract_asset_class(context_window) or "Unknown"
+        key = f"{product_url}|{symbol}|"
+        candidates.setdefault(
+            key,
+            {
+                "symbol": symbol,
+                "isin": "",
+                "display_name": display_name,
+                "asset_class": asset_class,
+                "product_url": product_url,
+                "holdings_url": "",
+            },
+        )
+
+    for product_match in PRODUCT_URL_PATTERN.finditer(html):
+        product_url = urljoin(
+            DISCOVERY_BASE_URL,
+            html_lib.unescape(product_match.group("product_url").strip()).replace("\\/", "/"),
+        )
+        product_url = _normalise_product_url(product_url)
+        window = html[max(0, product_match.start() - 1500) : min(len(html), product_match.end() + 1500)]
+        symbol_match = SYMBOL_KEY_PATTERN.search(window)
+        isin_match = ISIN_KEY_PATTERN.search(window)
+        symbol = "" if symbol_match is None else symbol_match.group("symbol").strip().upper()
+        isin = "" if isin_match is None else isin_match.group("isin").strip().upper()
+        display_name = _extract_display_name(window) or symbol
+        asset_class = _extract_asset_class(window) or "Unknown"
+        if not symbol and not isin:
+            continue
+        key = f"{product_url}|{symbol}|{isin}"
+        candidates.setdefault(
+            key,
+            {
+                "symbol": symbol,
+                "isin": isin,
+                "display_name": display_name or symbol,
+                "asset_class": asset_class,
+                "product_url": product_url,
+                "holdings_url": "",
+            },
+        )
+
+    return list(candidates.values())
 
 
-def _validate_candidate_support(candidate: dict[str, Any]) -> tuple[bool, str]:
+def _enrich_candidate_identity(candidate: dict[str, str]) -> dict[str, str]:
+    if candidate.get("isin") and candidate.get("asset_class", "").strip() not in {"", "Unknown"}:
+        return candidate
+
+    candidate["product_url"] = _normalise_product_url(candidate["product_url"])
+    html, _, context, browser, playwright_instance = fetch_rendered_html_and_request_ctx(
+        candidate["product_url"]
+    )
+    try:
+        page_text = _html_to_text(html)
+        if not candidate.get("display_name"):
+            candidate["display_name"] = _extract_display_name(html) or candidate.get("display_name", "")
+        if not candidate.get("isin"):
+            isin_match = TEXT_ISIN_PATTERN.search(page_text)
+            if isin_match:
+                candidate["isin"] = isin_match.group(1).strip().upper()
+        if candidate.get("asset_class", "").strip() in {"", "Unknown"}:
+            candidate["asset_class"] = _extract_asset_class(page_text) or "Unknown"
+    finally:
+        close_playwright(context, browser, playwright_instance)
+
+    return candidate
+
+
+def _html_to_text(html: str) -> str:
+    plain_text = re.sub(r"<[^>]+>", " ", html_lib.unescape(html))
+    return re.sub(r"\s+", " ", plain_text).strip()
+
+
+def _normalise_product_url(product_url: str) -> str:
+    cleaned = str(product_url).strip()
+    if not cleaned:
+        return ""
+
+    parsed = urlsplit(cleaned)
+    if "ishares.com" not in parsed.netloc.casefold() or not parsed.path.startswith("/uk/individual/en/products/"):
+        return cleaned
+
+    query_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    query_params.setdefault("siteEntryPassthrough", "true")
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            urlencode(query_params),
+            parsed.fragment,
+        )
+    )
+
+
+def _extract_display_name(text: str) -> str:
+    key_match = DISPLAY_NAME_KEY_PATTERN.search(text)
+    if key_match:
+        return html_lib.unescape(key_match.group("display_name")).replace('\\"', '"').strip()
+
+    name_matches = re.findall(r"(iShares[^<\n]{5,200})", html_lib.unescape(text), re.IGNORECASE)
+    return "" if not name_matches else re.sub(r"\s+", " ", name_matches[-1]).strip()
+
+
+def _extract_asset_class(text: str) -> str:
+    key_match = ASSET_CLASS_KEY_PATTERN.search(text)
+    if key_match:
+        asset_class = html_lib.unescape(key_match.group("asset_class")).replace('\\"', '"').strip()
+        return re.sub(r"\s+", " ", asset_class)
+
+    for asset_class in KNOWN_ASSET_CLASSES:
+        if asset_class.casefold() in text.casefold():
+            return asset_class
+    return ""
+
+
+def _validate_candidate_support(candidate: dict[str, Any]) -> tuple[bool, str, str]:
     try:
         holdings, validation, holdings_url = fetch_standardised_holdings_snapshot(
             symbol=candidate["symbol"],
             isin=candidate["isin"],
             product_page=candidate["product_url"],
         )
-    except Exception as exc:
-        return False, str(exc)
+    except ValueError as exc:
+        message = str(exc)
+        if "No CSV ajax links found" in message:
+            return False, "no_holdings_url", message
+        if "Unable to parse holdings CSV" in message:
+            return False, "parse_failed", message
+        if "CSV download failed" in message:
+            return False, "fetch_failed", message
+        return False, "fetch_failed", message
+    except Exception as exc:  # pragma: no cover - network/runtime fallback
+        return False, "fetch_failed", str(exc)
 
     if holdings.empty:
-        return False, "empty_holdings"
+        return False, "validation_failed", "Standardised holdings were empty."
     if not validation.positive_weight_sum_in_expected_band:
-        return False, "weight_sum_out_of_band"
+        return False, "validation_failed", "Standardised holdings failed validation checks."
 
     candidate["holdings_url"] = holdings_url
-    return True, ""
+    return True, "", ""
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -29,7 +30,7 @@ class BuildEtfCompositionTests(unittest.TestCase):
     def test_build_etf_composition_collapses_duplicate_holdings_to_one_row_per_etf(self) -> None:
         combined_holdings = pd.DataFrame(
             {
-                "parent_etf": ["SWDA", "SWDA", "EMIM", "WSML"],
+                "parent_etf": ["SWDA", "SWDA", "EIMI", "WSML"],
                 "pie_weight": [0.78, 0.78, 0.12, 0.10],
                 "company": ["A", "B", "C", "D"],
                 "contribution_pct": [1.0, 2.0, 3.0, 4.0],
@@ -38,7 +39,7 @@ class BuildEtfCompositionTests(unittest.TestCase):
 
         composition = _build_etf_composition(combined_holdings)
 
-        self.assertEqual(composition["parent_etf"].tolist(), ["SWDA", "EMIM", "WSML"])
+        self.assertEqual(composition["parent_etf"].tolist(), ["SWDA", "EIMI", "WSML"])
         self.assertEqual(composition["allocation_pct"].round(2).tolist(), [78.0, 12.0, 10.0])
         self.assertAlmostEqual(composition["allocation_pct"].sum(), 100.0, places=6)
 
@@ -46,13 +47,13 @@ class BuildEtfCompositionTests(unittest.TestCase):
         report = build_report(snapshot_date="20260408")
 
         self.assertIn("etf_composition", report)
-        self.assertEqual(report["etf_composition"]["parent_etf"].tolist(), ["SWDA", "EMIM", "WSML"])
+        self.assertEqual(report["etf_composition"]["parent_etf"].tolist(), ["SWDA", "EIMI", "WSML"])
         self.assertAlmostEqual(report["etf_composition"]["allocation_pct"].sum(), 100.0, places=6)
 
     def test_build_single_etf_dimension_exposure_uses_weight_pct_for_selected_etf(self) -> None:
         combined_holdings = pd.DataFrame(
             {
-                "parent_etf": ["SWDA", "SWDA", "EMIM", "SWDA"],
+                "parent_etf": ["SWDA", "SWDA", "EIMI", "SWDA"],
                 "company": ["Apple", "Microsoft", "Tencent", "Apple"],
                 "country": ["US", "US", "CN", "US"],
                 "sector": ["Tech", "Tech", "Tech", "Tech"],
@@ -70,7 +71,7 @@ class BuildEtfCompositionTests(unittest.TestCase):
     def test_build_report_exposes_single_etf_analysis_inputs(self) -> None:
         report = build_report(snapshot_date="20260408")
 
-        self.assertEqual(report["single_etf_options"], ["EMIM", "SWDA", "WSML"])
+        self.assertEqual(report["single_etf_options"], ["EIMI", "SWDA", "WSML"])
         swda = report["single_etf_analysis"]["SWDA"]
         self.assertIn("company_exposure", swda)
         self.assertIn("country_exposure", swda)
@@ -103,7 +104,7 @@ class BuildEtfCompositionTests(unittest.TestCase):
 
         self.assertEqual(
             [item["ticker"] for item in report["etf_descriptions"]],
-            ["SWDA", "EMIM", "WSML"],
+            ["SWDA", "EIMI", "WSML"],
         )
         self.assertIn("developed markets", report["etf_descriptions"][0]["description"].lower())
         self.assertIn("emerging markets", report["etf_descriptions"][1]["description"].lower())
@@ -219,7 +220,7 @@ class CashEquivalentClassificationTests(unittest.TestCase):
                 "weight_pct": [0.10, 0.20, 0.30, 0.40],
                 "pie_weight": [0.78, 0.12, 0.78, 0.12],
                 "contribution_pct": [0.078, 0.024, 0.234, 0.048],
-                "parent_etf": ["SWDA", "EMIM", "SWDA", "EMIM"],
+                "parent_etf": ["SWDA", "EIMI", "SWDA", "EIMI"],
             }
         )
 
@@ -231,14 +232,60 @@ class CashEquivalentClassificationTests(unittest.TestCase):
 
 class CustomPortfolioReportTests(unittest.TestCase):
     def test_build_report_from_holdings_supports_custom_saved_portfolios(self) -> None:
-        entries = resolve_portfolio_entries(
-            [
-                {"etf_id": "ishares-swda-ie00b4l5y983", "weight_pct": 78.0},
-                {"etf_id": "ishares-emim-ie00bkm4gz66", "weight_pct": 12.0},
-                {"etf_id": "ishares-wsml-ie00bf4rfh31", "weight_pct": 10.0},
-            ]
-        )
-        portfolio_inputs = build_combined_holdings_for_portfolio(entries, data_dir="data")
+        catalog = [
+            {
+                "etf_id": "ishares-swda-ie00b4l5y983",
+                "issuer_key": "ishares",
+                "symbol": "SWDA",
+                "isin": "IE00B4L5Y983",
+                "display_name": "iShares Core MSCI World UCITS ETF",
+                "asset_class": "Equity",
+                "product_url": "https://example.test/swda",
+                "holdings_url": "https://example.test/swda.csv",
+                "search_text": "swda ie00b4l5y983 ishares core msci world ucits etf",
+                "support_status": "supported",
+                "support_reason_code": "",
+                "support_error_detail": "",
+            },
+            {
+                "etf_id": "ishares-eimi-ie00bkm4gz66",
+                "issuer_key": "ishares",
+                "symbol": "EIMI",
+                "isin": "IE00BKM4GZ66",
+                "display_name": "iShares Core MSCI Emerging Markets IMI UCITS ETF",
+                "asset_class": "Equity",
+                "product_url": "https://example.test/eimi",
+                "holdings_url": "https://example.test/eimi.csv",
+                "search_text": "eimi ie00bkm4gz66 ishares core msci emerging markets imi ucits etf",
+                "support_status": "supported",
+                "support_reason_code": "",
+                "support_error_detail": "",
+            },
+            {
+                "etf_id": "ishares-wsml-ie00bf4rfh31",
+                "issuer_key": "ishares",
+                "symbol": "WSML",
+                "isin": "IE00BF4RFH31",
+                "display_name": "iShares MSCI World Small Cap UCITS ETF",
+                "asset_class": "Equity",
+                "product_url": "https://example.test/wsml",
+                "holdings_url": "https://example.test/wsml.csv",
+                "search_text": "wsml ie00bf4rfh31 ishares msci world small cap ucits etf",
+                "support_status": "supported",
+                "support_reason_code": "",
+                "support_error_detail": "",
+            },
+        ]
+
+        with patch("src.portfolio_analysis_app.custom_portfolios.load_etf_catalog", return_value=catalog):
+            entries = resolve_portfolio_entries(
+                [
+                    {"etf_id": "ishares-swda-ie00b4l5y983", "weight_pct": 78.0},
+                    {"etf_id": "ishares-eimi-ie00bkm4gz66", "weight_pct": 12.0},
+                    {"etf_id": "ishares-wsml-ie00bf4rfh31", "weight_pct": 10.0},
+                ]
+            )
+            portfolio_inputs = build_combined_holdings_for_portfolio(entries, data_dir="data")
 
         report = build_report_from_holdings(
             combined_holdings=portfolio_inputs["combined_holdings"],
@@ -246,7 +293,7 @@ class CustomPortfolioReportTests(unittest.TestCase):
             etf_descriptions=portfolio_inputs["etf_descriptions"],
         )
 
-        self.assertEqual(report["snapshot_date"], "Apr 8, 2026")
-        self.assertEqual(report["etf_composition"]["parent_etf"].tolist(), ["SWDA", "EMIM", "WSML"])
-        self.assertEqual([item["ticker"] for item in report["etf_descriptions"]], ["SWDA", "EMIM", "WSML"])
-        self.assertAlmostEqual(report["summary"]["portfolio_total_pct"], 99.92, places=2)
+        self.assertEqual(report["snapshot_date"], "Mixed cached snapshots")
+        self.assertEqual(report["etf_composition"]["parent_etf"].tolist(), ["SWDA", "EIMI", "WSML"])
+        self.assertEqual([item["ticker"] for item in report["etf_descriptions"]], ["SWDA", "EIMI", "WSML"])
+        self.assertAlmostEqual(report["summary"]["portfolio_total_pct"], 99.91, places=2)

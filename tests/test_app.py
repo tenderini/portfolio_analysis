@@ -196,12 +196,12 @@ def build_fake_report() -> dict:
         },
         "etf_descriptions": [
             {"ticker": "SWDA", "description": "Developed markets", "role": "Core exposure"},
-            {"ticker": "EMIM", "description": "Emerging markets", "role": "Emerging exposure"},
+            {"ticker": "EIMI", "description": "Emerging markets", "role": "Emerging exposure"},
             {"ticker": "WSML", "description": "Small cap", "role": "Small cap exposure"},
         ],
         "etf_composition": pd.DataFrame(
             {
-                "parent_etf": ["SWDA", "EMIM", "WSML"],
+                "parent_etf": ["SWDA", "EIMI", "WSML"],
                 "allocation_pct": [78.0, 12.0, 10.0],
             }
         ),
@@ -304,7 +304,7 @@ def build_fake_combined_holdings() -> pd.DataFrame:
                 "weight_pct": 6.0,
                 "pie_weight": 0.12,
                 "contribution_pct": 0.72,
-                "parent_etf": "EMIM",
+                "parent_etf": "EIMI",
             },
             {
                 "company": "Small Cap Co",
@@ -371,7 +371,7 @@ class AppLayoutTests(unittest.TestCase):
         )
         fake_custom_portfolios = fake_custom_portfolios or types.SimpleNamespace(
             DEFAULT_PORTFOLIO_NAME="PIE Default",
-            load_saved_portfolios=lambda data_dir=None: [
+            get_default_saved_portfolios=lambda data_dir=None: [
                 {
                     "name": "PIE Default",
                     "entries": [
@@ -381,9 +381,9 @@ class AppLayoutTests(unittest.TestCase):
                             "search_text": "SWDA",
                         },
                         {
-                            "etf_id": "ishares-emim-ie00bkm4gz66",
+                            "etf_id": "ishares-eimi-ie00bkm4gz66",
                             "weight_pct": 12.0,
-                            "search_text": "EMIM",
+                            "search_text": "EIMI",
                         },
                         {
                             "etf_id": "ishares-wsml-ie00bf4rfh31",
@@ -393,7 +393,6 @@ class AppLayoutTests(unittest.TestCase):
                     ],
                 }
             ],
-            save_saved_portfolios=lambda portfolios, data_dir=None: None,
             resolve_portfolio_entries=lambda entries: [
                 {
                     "etf_id": "ishares-swda-ie00b4l5y983",
@@ -409,13 +408,13 @@ class AppLayoutTests(unittest.TestCase):
                     "error": "",
                 },
                 {
-                    "etf_id": "ishares-emim-ie00bkm4gz66",
-                    "search_text": "EMIM",
-                    "symbol": "EMIM",
+                    "etf_id": "ishares-eimi-ie00bkm4gz66",
+                    "search_text": "EIMI",
+                    "symbol": "EIMI",
                     "isin": "IE00BKM4GZ66",
                     "display_name": "iShares Core MSCI Emerging Markets IMI UCITS ETF",
-                    "product_page": "https://example.test/emim",
-                    "holdings_url": "https://example.test/emim.csv",
+                    "product_page": "https://example.test/eimi",
+                    "holdings_url": "https://example.test/eimi.csv",
                     "issuer": "ishares",
                     "is_supported": True,
                     "weight_pct": 12.0,
@@ -456,14 +455,14 @@ class AppLayoutTests(unittest.TestCase):
                     "search_text": "swda ie00b4l5y983 ishares core msci world ucits etf",
                 },
                 {
-                    "etf_id": "ishares-emim-ie00bkm4gz66",
-                    "symbol": "EMIM",
+                    "etf_id": "ishares-eimi-ie00bkm4gz66",
+                    "symbol": "EIMI",
                     "isin": "IE00BKM4GZ66",
                     "display_name": "iShares Core MSCI Emerging Markets IMI UCITS ETF",
                     "asset_class": "Equity",
-                    "product_url": "https://example.test/emim",
-                    "holdings_url": "https://example.test/emim.csv",
-                    "search_text": "emim ie00bkm4gz66 ishares core msci emerging markets imi ucits etf",
+                    "product_url": "https://example.test/eimi",
+                    "holdings_url": "https://example.test/eimi.csv",
+                    "search_text": "eimi ie00bkm4gz66 ishares core msci emerging markets imi ucits etf",
                 },
             ],
             search_etf_catalog=lambda query, catalog=None, limit=20: (catalog or [])[:limit],
@@ -551,20 +550,109 @@ class AppLayoutTests(unittest.TestCase):
     def test_app_renders_catalogue_builder_controls(self) -> None:
         fake_streamlit = self.load_app()
 
-        self.assertIn("Saved portfolio", fake_streamlit.control_labels)
         self.assertIn("Portfolio name", fake_streamlit.control_labels)
         self.assertIn("Search ETF 1", fake_streamlit.control_labels)
         self.assertIn("Match 1", fake_streamlit.control_labels)
         self.assertIn("Weight 1", fake_streamlit.control_labels)
         self.assertIn("Catalogue search", fake_streamlit.control_labels)
         self.assertIn("Add ETF", fake_streamlit.control_labels)
-        self.assertIn("Save portfolio", fake_streamlit.control_labels)
+        self.assertIn("Remove ETF 1", fake_streamlit.control_labels)
+
+    def test_app_uses_supported_catalog_for_builder_and_full_catalogue_for_browse_page(self) -> None:
+        catalog_search_inputs: list[list[str]] = []
+
+        def fake_search(query, catalog=None, limit=20):
+            catalog_search_inputs.append(
+                [str(entry.get("support_status", "supported")) for entry in (catalog or [])]
+            )
+            return (catalog or [])[:limit]
+
+        self.load_app(
+            fake_etf_catalog=types.SimpleNamespace(
+                load_etf_catalog=lambda catalog_path=None: [
+                    {
+                        "etf_id": "ishares-swda-ie00b4l5y983",
+                        "symbol": "SWDA",
+                        "isin": "IE00B4L5Y983",
+                        "display_name": "iShares Core MSCI World UCITS ETF",
+                        "asset_class": "Equity",
+                        "product_url": "https://example.test/swda",
+                        "holdings_url": "https://example.test/swda.csv",
+                        "search_text": "swda ie00b4l5y983 ishares core msci world ucits etf",
+                        "support_status": "supported",
+                        "support_reason_code": "",
+                        "support_error_detail": "",
+                    },
+                    {
+                        "etf_id": "ishares-bad-ie00badbad01",
+                        "symbol": "BAD",
+                        "isin": "IE00BADBAD01",
+                        "display_name": "Broken ETF",
+                        "asset_class": "Equity",
+                        "product_url": "https://example.test/bad",
+                        "holdings_url": "",
+                        "search_text": "bad ie00badbad01 broken etf",
+                        "support_status": "unsupported",
+                        "support_reason_code": "parse_failed",
+                        "support_error_detail": "Unable to parse holdings CSV.",
+                    },
+                ],
+                search_etf_catalog=fake_search,
+                build_catalog_dataframe=lambda catalog=None, data_dir=None: pd.DataFrame([]),
+            )
+        )
+
+        self.assertIn(["supported"], catalog_search_inputs)
+        self.assertIn(["supported", "unsupported"], catalog_search_inputs)
+
+    def test_app_paginates_catalogue_results_in_pages_of_100(self) -> None:
+        catalog_rows = [
+            {
+                "etf_id": f"ishares-etf-{index:03d}-ie00{index:08d}"[-32:],
+                "symbol": f"ETF{index:03d}",
+                "isin": f"IE{index:010d}",
+                "display_name": f"ETF {index:03d}",
+                "asset_class": "Equity",
+                "product_url": f"https://example.test/etf-{index:03d}",
+                "holdings_url": "",
+                "search_text": f"etf {index:03d}",
+                "support_status": "supported",
+                "support_reason_code": "",
+                "support_error_detail": "",
+            }
+            for index in range(205)
+        ]
+
+        def fake_search(query, catalog=None, limit=20):
+            return list(catalog or [])[:limit]
+
+        fake_streamlit = self.load_app(
+            fake_etf_catalog=types.SimpleNamespace(
+                load_etf_catalog=lambda catalog_path=None: catalog_rows,
+                search_etf_catalog=fake_search,
+                build_catalog_dataframe=lambda catalog=None, data_dir=None: pd.DataFrame(
+                    {
+                        "symbol": [entry["symbol"] for entry in (catalog or [])],
+                        "isin": [entry["isin"] for entry in (catalog or [])],
+                        "display_name": [entry["display_name"] for entry in (catalog or [])],
+                        "asset_class": [entry["asset_class"] for entry in (catalog or [])],
+                        "cached_snapshot": ["Not cached" for _ in (catalog or [])],
+                    }
+                ),
+            )
+        )
+
+        catalogue_df = fake_streamlit.dataframe_calls[-1]["data"]
+        self.assertEqual(len(catalogue_df), 100)
+        self.assertEqual(catalogue_df.iloc[0]["symbol"], "ETF000")
+        self.assertEqual(catalogue_df.iloc[-1]["symbol"], "ETF099")
+        self.assertIn("Catalogue page", fake_streamlit.control_labels)
 
     def test_app_blocks_analysis_when_saved_portfolio_references_missing_catalog_entry(self) -> None:
         fake_streamlit = self.load_app(
             fake_custom_portfolios=types.SimpleNamespace(
                 DEFAULT_PORTFOLIO_NAME="Broken",
-                load_saved_portfolios=lambda data_dir=None: [
+                get_default_saved_portfolios=lambda data_dir=None: [
                     {
                         "name": "Broken",
                         "entries": [
@@ -572,7 +660,6 @@ class AppLayoutTests(unittest.TestCase):
                         ],
                     }
                 ],
-                save_saved_portfolios=lambda portfolios, data_dir=None: None,
                 resolve_portfolio_entries=lambda entries: [
                     {
                         "etf_id": "missing-id",

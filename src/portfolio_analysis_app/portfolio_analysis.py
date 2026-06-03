@@ -11,6 +11,9 @@ import pandas as pd
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = REPO_ROOT / "data"
 TOP_CONCENTRATION_BUCKETS = (10, 20, 50)
+ETF_SYMBOL_ALIASES = {
+    "EMIM": "EIMI",
+}
 ETF_DESCRIPTION_MAP = {
     "SWDA": {
         "ticker": "SWDA",
@@ -20,8 +23,8 @@ ETF_DESCRIPTION_MAP = {
         ),
         "role": "Core developed-world large and mid cap exposure.",
     },
-    "EMIM": {
-        "ticker": "EMIM",
+    "EIMI": {
+        "ticker": "EIMI",
         "description": (
             "Emerging markets ETF covering large-, mid-, and small-cap companies across countries "
             "such as China, India, Taiwan, Brazil, and South Africa."
@@ -359,7 +362,9 @@ def _read_combined_holdings(file_path: Path) -> pd.DataFrame:
     combined["company"] = _clean_text_series(combined["company"], unknown_label="Unknown")
     combined["country"] = _clean_text_series(combined["country"], unknown_label="Unknown")
     combined["sector"] = _clean_text_series(combined["sector"], unknown_label="Unknown")
-    combined["parent_etf"] = _clean_text_series(combined["parent_etf"], unknown_label="Unknown")
+    combined["parent_etf"] = _clean_text_series(combined["parent_etf"], unknown_label="Unknown").replace(
+        ETF_SYMBOL_ALIASES
+    )
     asset_class_series = combined.get("asset_class", pd.Series("", index=combined.index, dtype="object"))
     combined["asset_class"] = _clean_text_series(pd.Series(asset_class_series, index=combined.index), unknown_label="Unknown")
     combined["weight_pct"] = pd.to_numeric(combined["weight_pct"], errors="coerce").fillna(0.0)
