@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import importlib
 import re
 from pathlib import Path
 from typing import Any
@@ -244,7 +245,7 @@ def refresh_supported_etf_snapshot(
         raise ValueError(str(entry["error"]))
 
     try:
-        from . import data_retrival
+        data_retrival = importlib.import_module("src.portfolio_analysis_app.data_retrival")
     except Exception as exc:  # pragma: no cover - optional runtime dependency
         raise RuntimeError(
             "Refreshing ETF snapshots requires the optional Playwright-based retrieval dependencies."
@@ -261,25 +262,19 @@ def refresh_supported_etf_snapshot(
         isin=isin,
         product_page=product_page,
         pie_weight=float(entry.get("weight_pct", 0.0)) / 100.0,
+        issuer_key=str(entry.get("issuer", "ishares")).strip() or "ishares",
+        holdings_url=str(entry.get("holdings_url", "")).strip(),
     )
 
-    html, request_context, context, browser, playwright_instance = data_retrival.fetch_rendered_html_and_request_ctx(
-        etf.product_page
+    holdings, validation, resolved_holdings_url = data_retrival.fetch_standardised_holdings_snapshot(
+        symbol=etf.symbol,
+        isin=etf.isin,
+        product_page=etf.product_page,
+        pie_weight=etf.pie_weight,
+        issuer_key=etf.issuer_key,
+        holdings_url=etf.holdings_url,
     )
-    try:
-        csv_url = data_retrival.extract_holdings_csv_url(etf.product_page, html)
-        csv_text = data_retrival.download_csv_via_playwright(
-            request_context,
-            csv_url,
-            referer=etf.product_page,
-        )
-        raw_csv_path = data_retrival.save_raw_csv_output(etf, csv_text)
-        raw_df = data_retrival.parse_holdings_csv(csv_text)
-        holdings = data_retrival.standardise_holdings(raw_df)
-        validation = data_retrival.validate_holdings_capture(raw_df, holdings)
-        data_retrival.save_etf_outputs(etf, holdings, {"etfs": {}}, validation, raw_csv_path)
-    finally:  # pragma: no cover - runtime/network path
-        data_retrival.close_playwright(context, browser, playwright_instance)
+    data_retrival.save_etf_outputs(etf, holdings, {"etfs": {}}, validation, resolved_holdings_url)
 
     return {
         "symbol": symbol,

@@ -694,3 +694,66 @@ class GenerateEtfCatalogTests(unittest.TestCase):
             saved = output_path.read_text(encoding="utf-8")
 
         self.assertLess(saved.find('"display_name": "Alpha ETF"'), saved.find('"display_name": "Zeta ETF"'))
+
+    def test_merge_preserved_non_ishares_catalog_rows_keeps_vanguard_entries(self) -> None:
+        refreshed_ishares_rows = [
+            {
+                "etf_id": "ishares-swda-ie00b4l5y983",
+                "issuer_key": "ishares",
+                "symbol": "SWDA",
+                "isin": "IE00B4L5Y983",
+                "display_name": "iShares Core MSCI World UCITS ETF",
+                "asset_class": "Equity",
+                "product_url": "https://example.test/swda-new",
+                "holdings_url": "https://example.test/swda-new.csv",
+                "search_text": "swda ie00b4l5y983 ishares core msci world ucits etf",
+                "support_status": "supported",
+                "support_reason_code": "",
+                "support_error_detail": "",
+            }
+        ]
+        existing_catalog_rows = [
+            {
+                "etf_id": "ishares-swda-ie00b4l5y983",
+                "issuer_key": "ishares",
+                "symbol": "SWDA",
+                "isin": "IE00B4L5Y983",
+                "display_name": "Old SWDA",
+                "asset_class": "Equity",
+                "product_url": "https://example.test/swda-old",
+                "holdings_url": "https://example.test/swda-old.csv",
+                "search_text": "old swda",
+                "support_status": "supported",
+                "support_reason_code": "",
+                "support_error_detail": "",
+            },
+            {
+                "etf_id": "vanguard-vwrp-ie00bk5bqt80",
+                "issuer_key": "vanguard",
+                "symbol": "VWRP",
+                "isin": "IE00BK5BQT80",
+                "display_name": "Vanguard FTSE All-World UCITS ETF",
+                "asset_class": "Equity",
+                "product_url": "https://example.test/vwrp",
+                "holdings_url": "https://example.test/vwrp.csv",
+                "search_text": "vwrp ie00bk5bqt80 vanguard ftse all-world ucits etf",
+                "support_status": "supported",
+                "support_reason_code": "",
+                "support_error_detail": "",
+            },
+        ]
+
+        merged = generate_etf_catalog._merge_preserved_non_ishares_catalog_rows(
+            refreshed_ishares_rows,
+            existing_catalog_rows,
+        )
+
+        self.assertEqual([entry["symbol"] for entry in merged], ["SWDA", "VWRP"])
+        self.assertEqual(
+            next(entry for entry in merged if entry["symbol"] == "SWDA")["product_url"],
+            "https://example.test/swda-new",
+        )
+        self.assertEqual(
+            next(entry for entry in merged if entry["symbol"] == "VWRP")["issuer_key"],
+            "vanguard",
+        )

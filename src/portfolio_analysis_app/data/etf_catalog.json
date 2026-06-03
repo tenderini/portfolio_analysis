@@ -11982,5 +11982,33 @@
     "support_status": "supported",
     "support_reason_code": "",
     "support_error_detail": ""
+  },
+  {
+    "etf_id": "vanguard-vwrp-ie00bk5bqt80",
+    "issuer_key": "vanguard",
+    "symbol": "VWRP",
+    "isin": "IE00BK5BQT80",
+    "display_name": "Vanguard FTSE All-World UCITS ETF",
+    "asset_class": "Equity",
+    "product_url": "https://www.vanguard.co.uk/professional/product/etf/equity/9679/ftse-all-world-ucits-etf-accumulating",
+    "holdings_url": "",
+    "search_text": "vwrp ie00bk5bqt80 vanguard ftse all-world ucits etf",
+    "support_status": "supported",
+    "support_reason_code": "",
+    "support_error_detail": ""
+  },
+  {
+    "etf_id": "vanguard-vags-ie00bg47k971",
+    "issuer_key": "vanguard",
+    "symbol": "VAGS",
+    "isin": "IE00BG47K971",
+    "display_name": "Vanguard Global Aggregate Bond UCITS ETF GBP Hedged Accumulating",
+    "asset_class": "Fixed Income",
+    "product_url": "https://www.vanguard.co.uk/uk-fund-directory/product/etf/bond/9685/global-aggregate-bond-ucits",
+    "holdings_url": "",
+    "search_text": "vags ie00bg47k971 vanguard global aggregate bond ucits etf gbp hedged accumulating fixed income",
+    "support_status": "supported",
+    "support_reason_code": "",
+    "support_error_detail": ""
   }
 ]

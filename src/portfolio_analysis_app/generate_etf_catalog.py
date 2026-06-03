@@ -228,6 +228,27 @@ def write_catalog(
     )
 
 
+def _merge_preserved_non_ishares_catalog_rows(
+    refreshed_catalog_rows: list[dict[str, str]],
+    existing_catalog_rows: list[dict[str, Any]],
+) -> list[dict[str, str]]:
+    merged_rows = list(refreshed_catalog_rows)
+    refreshed_ids = {str(row.get("etf_id", "")).strip() for row in refreshed_catalog_rows}
+    refreshed_isins = {str(row.get("isin", "")).strip().upper() for row in refreshed_catalog_rows}
+
+    for existing_row in existing_catalog_rows:
+        issuer_key = str(existing_row.get("issuer_key", "ishares")).strip().casefold()
+        etf_id = str(existing_row.get("etf_id", "")).strip()
+        isin = str(existing_row.get("isin", "")).strip().upper()
+        if issuer_key == "ishares":
+            continue
+        if etf_id in refreshed_ids or isin in refreshed_isins:
+            continue
+        merged_rows.append({key: str(value) for key, value in existing_row.items()})
+
+    return merged_rows
+
+
 def _load_catalog_checkpoint(
     checkpoint_path: Path = CATALOG_CHECKPOINT_PATH,
 ) -> list[dict[str, Any]]:
@@ -559,6 +580,8 @@ def main() -> None:
     LOGGER.info("Starting ETF catalog generation")
     candidates, used_fallback = discover_ishares_candidates()
     catalog = _process_catalog_candidates(candidates)
+    existing_catalog = load_etf_catalog(DEFAULT_ETF_CATALOG_PATH)
+    catalog = _merge_preserved_non_ishares_catalog_rows(catalog, existing_catalog)
     report = build_catalog_report(
         discovered=len(candidates),
         catalog=catalog,

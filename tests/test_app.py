@@ -46,6 +46,7 @@ class FakeStreamlit(types.ModuleType):
         self.plotly_chart_calls: list[dict] = []
         self.bar_titles: list[str | None] = []
         self.bar_figures: list["FakeFigure"] = []
+        self.selectbox_calls: list[dict] = []
         self.session_state: dict = {}
         self.column_config = FakeColumnConfig()
         self.sidebar = self._Sidebar(self)
@@ -125,6 +126,7 @@ class FakeStreamlit(types.ModuleType):
 
     def selectbox(self, label, options, index=0, format_func=None):
         self.control_labels.append(label)
+        self.selectbox_calls.append({"label": label, "options": list(options), "index": index})
         return list(options)[index]
 
     def select_slider(self, label, options, value=None):
@@ -604,6 +606,40 @@ class AppLayoutTests(unittest.TestCase):
 
         self.assertIn(["supported"], catalog_search_inputs)
         self.assertIn(["supported", "unsupported"], catalog_search_inputs)
+
+    def test_app_includes_issuer_in_portfolio_builder_match_labels(self) -> None:
+        fake_streamlit = self.load_app(
+            fake_etf_catalog=types.SimpleNamespace(
+                load_etf_catalog=lambda catalog_path=None: [
+                    {
+                        "etf_id": "vanguard-vwrp-ie00bk5bqt80",
+                        "issuer_key": "vanguard",
+                        "symbol": "VWRP",
+                        "isin": "IE00BK5BQT80",
+                        "display_name": "Vanguard FTSE All-World UCITS ETF",
+                        "asset_class": "Equity",
+                        "product_url": "https://example.test/vwrp",
+                        "holdings_url": "https://example.test/vwrp.csv",
+                        "search_text": "vwrp ie00bk5bqt80 vanguard ftse all-world ucits etf",
+                        "support_status": "supported",
+                        "support_reason_code": "",
+                        "support_error_detail": "",
+                    }
+                ],
+                search_etf_catalog=lambda query, catalog=None, limit=20: list(catalog or [])[:limit],
+                build_catalog_dataframe=lambda catalog=None, data_dir=None: pd.DataFrame([]),
+            )
+        )
+
+        match_calls = [
+            call for call in fake_streamlit.selectbox_calls if call["label"].startswith("Match ")
+        ]
+
+        self.assertTrue(match_calls)
+        self.assertIn(
+            "VWRP · Vanguard · IE00BK5BQT80 · Vanguard FTSE All-World UCITS ETF",
+            match_calls[0]["options"],
+        )
 
     def test_app_paginates_catalogue_results_in_pages_of_100(self) -> None:
         catalog_rows = [

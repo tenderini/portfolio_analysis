@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd
@@ -232,6 +234,19 @@ class CashEquivalentClassificationTests(unittest.TestCase):
 
 class CustomPortfolioReportTests(unittest.TestCase):
     def test_build_report_from_holdings_supports_custom_saved_portfolios(self) -> None:
+        def write_snapshot(data_dir: Path, symbol: str, date: str, company: str) -> None:
+            pd.DataFrame(
+                {
+                    "company": [company],
+                    "country": ["US"],
+                    "sector": ["Technology"],
+                    "asset_class": ["Equity"],
+                    "holding_type": ["security"],
+                    "is_cash_equivalent": [False],
+                    "weight_pct": [100.0],
+                }
+            ).to_parquet(data_dir / f"{symbol}_{date}_holdings.parquet", index=False)
+
         catalog = [
             {
                 "etf_id": "ishares-swda-ie00b4l5y983",
@@ -277,23 +292,29 @@ class CustomPortfolioReportTests(unittest.TestCase):
             },
         ]
 
-        with patch("src.portfolio_analysis_app.custom_portfolios.load_etf_catalog", return_value=catalog):
-            entries = resolve_portfolio_entries(
-                [
-                    {"etf_id": "ishares-swda-ie00b4l5y983", "weight_pct": 78.0},
-                    {"etf_id": "ishares-eimi-ie00bkm4gz66", "weight_pct": 12.0},
-                    {"etf_id": "ishares-wsml-ie00bf4rfh31", "weight_pct": 10.0},
-                ]
-            )
-            portfolio_inputs = build_combined_holdings_for_portfolio(entries, data_dir="data")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            write_snapshot(data_dir, "SWDA", "20260603", "Apple")
+            write_snapshot(data_dir, "EIMI", "20260602", "Tencent")
+            write_snapshot(data_dir, "WSML", "20260601", "Small Cap Co")
 
-        report = build_report_from_holdings(
-            combined_holdings=portfolio_inputs["combined_holdings"],
-            snapshot_label=portfolio_inputs["snapshot_label"],
-            etf_descriptions=portfolio_inputs["etf_descriptions"],
-        )
+            with patch("src.portfolio_analysis_app.custom_portfolios.load_etf_catalog", return_value=catalog):
+                entries = resolve_portfolio_entries(
+                    [
+                        {"etf_id": "ishares-swda-ie00b4l5y983", "weight_pct": 78.0},
+                        {"etf_id": "ishares-eimi-ie00bkm4gz66", "weight_pct": 12.0},
+                        {"etf_id": "ishares-wsml-ie00bf4rfh31", "weight_pct": 10.0},
+                    ]
+                )
+                portfolio_inputs = build_combined_holdings_for_portfolio(entries, data_dir=data_dir)
+
+            report = build_report_from_holdings(
+                combined_holdings=portfolio_inputs["combined_holdings"],
+                snapshot_label=portfolio_inputs["snapshot_label"],
+                etf_descriptions=portfolio_inputs["etf_descriptions"],
+            )
 
         self.assertEqual(report["snapshot_date"], "Mixed cached snapshots")
         self.assertEqual(report["etf_composition"]["parent_etf"].tolist(), ["SWDA", "EIMI", "WSML"])
         self.assertEqual([item["ticker"] for item in report["etf_descriptions"]], ["SWDA", "EIMI", "WSML"])
-        self.assertAlmostEqual(report["summary"]["portfolio_total_pct"], 99.91, places=2)
+        self.assertAlmostEqual(report["summary"]["portfolio_total_pct"], 100.0, places=2)

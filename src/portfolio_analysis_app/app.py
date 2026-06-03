@@ -325,6 +325,26 @@ def _set_portfolio_editor_state(portfolio: dict[str, Any]) -> None:
     )
 
 
+def _format_issuer_label(issuer_key: str) -> str:
+    issuer = str(issuer_key).strip().casefold()
+    if issuer == "ishares":
+        return "iShares"
+    if issuer == "vanguard":
+        return "Vanguard"
+    return str(issuer_key).strip()
+
+
+def _format_catalogue_match_label(match: dict[str, Any]) -> str:
+    issuer_label = _format_issuer_label(str(match.get("issuer_key", "")))
+    label_parts = [
+        str(match["symbol"]),
+        issuer_label,
+        str(match["isin"]),
+        str(match["display_name"]),
+    ]
+    return " · ".join(part for part in label_parts if part)
+
+
 def _render_catalogue_match_picker(
     row_index: int,
     entry: dict[str, Any],
@@ -335,14 +355,11 @@ def _render_catalogue_match_picker(
         value=str(entry.get("search_text", "")),
     )
     matches = search_etf_catalog(search_text, catalog)
-    labels = ["Select ETF..."] + [
-        f'{match["symbol"]} · {match["isin"]} · {match["display_name"]}'
-        for match in matches
-    ]
+    labels = ["Select ETF..."] + [_format_catalogue_match_label(match) for match in matches]
     label_to_id = {"Select ETF...": ""}
     label_to_id.update(
         {
-            f'{match["symbol"]} · {match["isin"]} · {match["display_name"]}': match["etf_id"]
+            _format_catalogue_match_label(match): match["etf_id"]
             for match in matches
         }
     )

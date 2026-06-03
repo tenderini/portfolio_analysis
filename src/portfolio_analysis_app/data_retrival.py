@@ -62,8 +62,10 @@ TODAY = datetime.utcnow().strftime("%Y%m%d")
 class ETF:
     symbol: str
     isin: str
-    product_page: str   # BlackRock product page (more stable than ishares.com)
+    product_page: str
     pie_weight: float
+    issuer_key: str = "ishares"
+    holdings_url: str = ""
 
 
 @dataclass(frozen=True)
@@ -269,6 +271,102 @@ def download_csv_via_playwright(request_ctx, csv_url: str, referer: str) -> str:
 
 
 # -----------------------
+# Vanguard resolver + downloader
+# -----------------------
+
+def extract_vanguard_holdings_url(product_page_url: str, rendered_html: str) -> str:
+    candidates: list[str] = []
+    for match in re.finditer(r'(?:href|src)="(?P<url>[^"]+)"', rendered_html, re.IGNORECASE):
+        raw_url = html_lib.unescape(match.group("url")).strip()
+        if not raw_url:
+            continue
+        url = urljoin(product_page_url, raw_url)
+        url_lower = url.lower()
+        if any(token in url_lower for token in ("holding", "portfolio")) and any(
+            token in url_lower for token in (".csv", ".xls", ".xlsx", "download")
+        ):
+            candidates.append(url)
+
+    if not candidates:
+        dbg_path = os.path.join(DATA_DIR, "debug_no_vanguard_holdings_link.html")
+        with open(dbg_path, "w", encoding="utf-8") as f:
+            f.write(rendered_html)
+        raise ValueError(
+            f"No Vanguard holdings links found on page: {product_page_url}. "
+            f"Saved HTML to {dbg_path}."
+        )
+
+    def score(url: str) -> int:
+        url_lower = url.lower()
+        score_value = 0
+        if "holding" in url_lower or "holdings" in url_lower:
+            score_value += 10
+        if ".csv" in url_lower:
+            score_value += 5
+        if ".xlsx" in url_lower or ".xls" in url_lower:
+            score_value += 4
+        if "download" in url_lower:
+            score_value += 2
+        return score_value
+
+    candidates.sort(key=score, reverse=True)
+    return candidates[0]
+
+
+def download_vanguard_holdings_via_playwright(request_ctx, holdings_url: str, referer: str) -> bytes:
+    resp = request_ctx.get(
+        holdings_url,
+        headers={
+            "Referer": referer,
+            "User-Agent": HEADERS_UA,
+            "Accept": "text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,*/*;q=0.9",
+        },
+        timeout=60000,
+    )
+    if not resp.ok:
+        raise ValueError(f"Vanguard holdings download failed: HTTP {resp.status} {resp.status_text} for {holdings_url}")
+    return resp.body()
+
+
+def parse_vanguard_holdings_content(content: bytes | str, holdings_url: str) -> pd.DataFrame:
+    url_lower = holdings_url.lower()
+    if ".xls" in url_lower or ".xlsx" in url_lower:
+        return _parse_vanguard_holdings_excel(content)
+    if isinstance(content, bytes):
+        text = content.decode("utf-8-sig")
+    else:
+        text = content
+    return parse_vanguard_holdings_csv(text)
+
+
+def parse_vanguard_holdings_csv(csv_text: str) -> pd.DataFrame:
+    last_err: Optional[Exception] = None
+    for skip in range(0, 30):
+        try:
+            df = pd.read_csv(io.StringIO(csv_text), skiprows=skip)
+            if _find_vanguard_weight_column(df.columns.tolist()) is not None:
+                return df
+        except Exception as exc:
+            last_err = exc
+    raise ValueError(f"Unable to parse Vanguard holdings CSV. Last error: {last_err}")
+
+
+def _parse_vanguard_holdings_excel(content: bytes | str) -> pd.DataFrame:
+    data = content if isinstance(content, bytes) else content.encode("utf-8")
+    last_err: Optional[Exception] = None
+    workbook = pd.ExcelFile(io.BytesIO(data))
+    for sheet_name in workbook.sheet_names:
+        for skip in range(0, 30):
+            try:
+                df = workbook.parse(sheet_name=sheet_name, skiprows=skip)
+                if _find_vanguard_weight_column(df.columns.astype(str).tolist()) is not None:
+                    return df
+            except Exception as exc:
+                last_err = exc
+    raise ValueError(f"Unable to parse Vanguard holdings spreadsheet. Last error: {last_err}")
+
+
+# -----------------------
 # CSV parsing + standardisation
 # -----------------------
 
@@ -296,6 +394,33 @@ def _pick_matching_column(columns: list[str], possible: list[str]) -> Optional[s
             if c.strip().lower() == p.strip().lower():
                 return c
     return None
+
+
+def _find_vanguard_weight_column(columns: list[str]) -> Optional[str]:
+    return _pick_matching_column(
+        columns,
+        [
+            "% of market value",
+            "% of Market Value",
+            "Percent of market value",
+            "Percent of Market Value",
+            "Market value %",
+            "Weight",
+            "Weight %",
+            "Weight (%)",
+        ],
+    )
+
+
+def _coerce_weight_pct(series: pd.Series) -> pd.Series:
+    cleaned = (
+        series.astype(str)
+        .str.replace("%", "", regex=False)
+        .str.replace(",", "", regex=False)
+        .str.strip()
+    )
+    cleaned = cleaned.replace({"": None, "nan": None, "None": None})
+    return pd.to_numeric(cleaned, errors="coerce")
 
 
 def _extract_standard_columns(df: pd.DataFrame) -> Tuple[pd.DataFrame, str]:
@@ -351,6 +476,58 @@ def standardise_holdings(df: pd.DataFrame) -> pd.DataFrame:
     return classify_holding_types(out)
 
 
+def standardise_vanguard_holdings(
+    df: pd.DataFrame,
+    symbol: str,
+    asset_class: str,
+) -> pd.DataFrame:
+    raw = df.copy()
+    raw.columns = [str(c).strip() for c in raw.columns]
+
+    weight_col = _find_vanguard_weight_column(raw.columns.tolist())
+    if weight_col is None:
+        raise ValueError("No Vanguard weight column found.")
+
+    name_col = _pick_matching_column(
+        raw.columns.tolist(),
+        ["Holding name", "Holding Name", "Name", "Security Name", "Issuer Name"],
+    )
+    if name_col is None:
+        raise ValueError("No Vanguard holding name column found.")
+
+    country_col = _pick_matching_column(
+        raw.columns.tolist(),
+        ["Country", "Country of Risk", "Region", "Market"],
+    )
+    sector_col = _pick_matching_column(
+        raw.columns.tolist(),
+        ["Sector", "GICS Sector", "Industry Sector", "Credit Quality"],
+    )
+    is_fixed_income = asset_class.strip().casefold() == "fixed income" or symbol.strip().upper() == "VAGS"
+
+    country = raw[country_col] if country_col else pd.Series("Unknown", index=raw.index)
+    sector = raw[sector_col] if sector_col else pd.Series("Fixed Income" if is_fixed_income else "", index=raw.index)
+    asset_class_series = pd.Series(asset_class.strip() or "Unknown", index=raw.index)
+
+    out = pd.DataFrame(
+        {
+            "company": raw[name_col],
+            "country": country,
+            "sector": sector,
+            "asset_class": asset_class_series,
+            "weight_pct": _coerce_weight_pct(raw[weight_col]),
+        }
+    )
+    out = out.dropna(subset=["weight_pct"])
+    out = out[out["weight_pct"] > 0]
+    out["company"] = out["company"].fillna("").astype(str).str.strip()
+    out["country"] = out["country"].fillna("Unknown").astype(str).str.strip().replace("", "Unknown")
+    out["sector"] = out["sector"].fillna("").astype(str).str.strip()
+    if is_fixed_income:
+        out["sector"] = out["sector"].replace("", "Fixed Income")
+    return classify_holding_types(out)
+
+
 def validate_holdings_capture(raw_df: pd.DataFrame, holdings: pd.DataFrame) -> HoldingsValidation:
     extracted, weight_col = _extract_standard_columns(raw_df)
     text_cols = ["company", "country", "sector"]
@@ -386,6 +563,39 @@ def validate_holdings_capture(raw_df: pd.DataFrame, holdings: pd.DataFrame) -> H
     )
 
 
+def validate_vanguard_holdings_capture(raw_df: pd.DataFrame, holdings: pd.DataFrame) -> HoldingsValidation:
+    raw = raw_df.copy()
+    raw.columns = [str(c).strip() for c in raw.columns]
+    weight_col = _find_vanguard_weight_column(raw.columns.tolist())
+    if weight_col is None:
+        raise ValueError("No Vanguard weight column found.")
+
+    numeric_weights = _coerce_weight_pct(raw[weight_col])
+    numeric_weight = numeric_weights.notna()
+    positive_weight = numeric_weights > 0
+    standardised_weight_sum = float(holdings["weight_pct"].sum())
+
+    return HoldingsValidation(
+        raw_rows=int(len(raw)),
+        raw_columns=raw.columns.astype(str).tolist(),
+        resolved_weight_column=weight_col,
+        rows_with_numeric_weight=int(numeric_weight.sum()),
+        rows_with_positive_weight=int(positive_weight.sum()),
+        rows_with_non_positive_weight=int((numeric_weight & ~positive_weight).sum()),
+        standardised_rows=int(len(holdings)),
+        dropped_rows_vs_raw=int(len(raw) - len(holdings)),
+        dropped_rows_vs_positive_weight=int(positive_weight.sum() - len(holdings)),
+        missing_company_rows=int((holdings["company"].fillna("").astype(str).str.strip() == "").sum()),
+        missing_country_rows=int((holdings["country"].fillna("").astype(str).str.strip() == "").sum()),
+        missing_sector_rows=int((holdings["sector"].fillna("").astype(str).str.strip() == "").sum()),
+        raw_numeric_weight_sum=round(float(numeric_weights.loc[numeric_weight].sum()), 6),
+        positive_weight_sum=round(float(numeric_weights.loc[positive_weight].sum()), 6),
+        standardised_weight_sum=round(standardised_weight_sum, 6),
+        weight_sum_delta_vs_positive_rows=round(standardised_weight_sum - float(numeric_weights.loc[positive_weight].sum()), 6),
+        positive_weight_sum_in_expected_band=95.0 <= float(numeric_weights.loc[positive_weight].sum()) <= 105.0,
+    )
+
+
 # -----------------------
 # Analytics + persistence
 # -----------------------
@@ -395,8 +605,28 @@ def fetch_standardised_holdings_snapshot(
     isin: str,
     product_page: str,
     pie_weight: float = 0.0,
+    issuer_key: str = "ishares",
+    holdings_url: str = "",
 ) -> Tuple[pd.DataFrame, HoldingsValidation, str]:
-    etf = ETF(symbol=symbol, isin=isin, product_page=product_page, pie_weight=pie_weight)
+    issuer = issuer_key.strip().casefold() or "ishares"
+    if issuer == "vanguard":
+        return fetch_standardised_vanguard_holdings_snapshot(
+            symbol=symbol,
+            isin=isin,
+            product_page=product_page,
+            holdings_url=holdings_url,
+        )
+    if issuer != "ishares":
+        raise ValueError(f"Unsupported ETF issuer: {issuer_key}")
+
+    etf = ETF(
+        symbol=symbol,
+        isin=isin,
+        product_page=product_page,
+        pie_weight=pie_weight,
+        issuer_key=issuer,
+        holdings_url=holdings_url,
+    )
     html, request_context, context, browser, playwright_instance = fetch_rendered_html_and_request_ctx(
         etf.product_page
     )
@@ -411,6 +641,31 @@ def fetch_standardised_holdings_snapshot(
         holdings = standardise_holdings(raw_df)
         validation = validate_holdings_capture(raw_df, holdings)
         return holdings, validation, csv_url
+    finally:
+        close_playwright(context, browser, playwright_instance)
+
+
+def fetch_standardised_vanguard_holdings_snapshot(
+    symbol: str,
+    isin: str,
+    product_page: str,
+    holdings_url: str = "",
+) -> Tuple[pd.DataFrame, HoldingsValidation, str]:
+    html, request_context, context, browser, playwright_instance = fetch_rendered_html_and_request_ctx(
+        product_page
+    )
+    try:
+        resolved_holdings_url = holdings_url.strip() or extract_vanguard_holdings_url(product_page, html)
+        content = download_vanguard_holdings_via_playwright(
+            request_context,
+            resolved_holdings_url,
+            referer=product_page,
+        )
+        raw_df = parse_vanguard_holdings_content(content, resolved_holdings_url)
+        asset_class = "Fixed Income" if symbol.strip().upper() == "VAGS" else "Equity"
+        holdings = standardise_vanguard_holdings(raw_df, symbol=symbol, asset_class=asset_class)
+        validation = validate_vanguard_holdings_capture(raw_df, holdings)
+        return holdings, validation, resolved_holdings_url
     finally:
         close_playwright(context, browser, playwright_instance)
 

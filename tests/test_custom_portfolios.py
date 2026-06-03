@@ -4,10 +4,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pandas as pd
+
 from src.portfolio_analysis_app.custom_portfolios import (
     DEFAULT_PORTFOLIO_NAME,
     build_combined_holdings_for_portfolio,
     load_saved_portfolios,
+    refresh_supported_etf_snapshot,
     resolve_portfolio_entries,
     save_saved_portfolios,
     validate_portfolio_entries,
@@ -187,19 +190,106 @@ class SavedPortfolioTests(unittest.TestCase):
         self.assertEqual(validation["total_weight_pct"], 100.0)
 
     def test_build_combined_holdings_for_portfolio_uses_latest_cached_holdings(self) -> None:
-        with patch(
-            "src.portfolio_analysis_app.custom_portfolios.load_etf_catalog",
-            return_value=self._baseline_catalog(),
-        ):
-            entries = resolve_portfolio_entries(
-                [
-                    {"etf_id": "ishares-swda-ie00b4l5y983", "weight_pct": 78.0},
-                    {"etf_id": "ishares-eimi-ie00bkm4gz66", "weight_pct": 12.0},
-                    {"etf_id": "ishares-wsml-ie00bf4rfh31", "weight_pct": 10.0},
-                ]
-            )
-            result = build_combined_holdings_for_portfolio(entries, data_dir=Path("data"))
+        def write_snapshot(data_dir: Path, symbol: str, date: str, company: str) -> None:
+            pd.DataFrame(
+                {
+                    "company": [company],
+                    "country": ["US"],
+                    "sector": ["Technology"],
+                    "asset_class": ["Equity"],
+                    "holding_type": ["security"],
+                    "is_cash_equivalent": [False],
+                    "weight_pct": [100.0],
+                }
+            ).to_parquet(data_dir / f"{symbol}_{date}_holdings.parquet", index=False)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_dir = Path(tmpdir)
+            write_snapshot(data_dir, "SWDA", "20260601", "Old Apple")
+            write_snapshot(data_dir, "SWDA", "20260603", "Apple")
+            write_snapshot(data_dir, "EIMI", "20260602", "Tencent")
+            write_snapshot(data_dir, "WSML", "20260601", "Small Cap Co")
+
+            with patch(
+                "src.portfolio_analysis_app.custom_portfolios.load_etf_catalog",
+                return_value=self._baseline_catalog(),
+            ):
+                entries = resolve_portfolio_entries(
+                    [
+                        {"etf_id": "ishares-swda-ie00b4l5y983", "weight_pct": 78.0},
+                        {"etf_id": "ishares-eimi-ie00bkm4gz66", "weight_pct": 12.0},
+                        {"etf_id": "ishares-wsml-ie00bf4rfh31", "weight_pct": 10.0},
+                    ]
+                )
+                result = build_combined_holdings_for_portfolio(entries, data_dir=data_dir)
 
         self.assertEqual(result["snapshot_label"], "Mixed cached snapshots")
         self.assertEqual(set(result["combined_holdings"]["parent_etf"]), {"SWDA", "EIMI", "WSML"})
-        self.assertAlmostEqual(result["combined_holdings"]["contribution_pct"].sum(), 99.91, places=2)
+        self.assertIn("Apple", result["combined_holdings"]["company"].tolist())
+        self.assertNotIn("Old Apple", result["combined_holdings"]["company"].tolist())
+        self.assertAlmostEqual(result["combined_holdings"]["contribution_pct"].sum(), 100.0, places=2)
+
+    def test_refresh_supported_etf_snapshot_passes_issuer_and_holdings_url_to_retrieval(self) -> None:
+        holdings = pd.DataFrame(
+            {
+                "company": ["Apple Inc."],
+                "country": ["North America"],
+                "sector": ["Technology"],
+                "asset_class": ["Equity"],
+                "weight_pct": [4.5],
+                "holding_type": ["security"],
+                "is_cash_equivalent": [False],
+            }
+        )
+        validation = object()
+        calls: list[dict[str, object]] = []
+
+        class FakeDataRetrival:
+            TODAY = "20260603"
+
+            class ETF:
+                def __init__(self, **kwargs):
+                    self.__dict__.update(kwargs)
+
+            @staticmethod
+            def fetch_standardised_holdings_snapshot(**kwargs):
+                calls.append(kwargs)
+                return holdings, validation, "https://example.test/vwrp.csv"
+
+            @staticmethod
+            def save_etf_outputs(etf, saved_holdings, meta, saved_validation, raw_csv_path):
+                calls.append(
+                    {
+                        "saved_etf": etf,
+                        "saved_holdings": saved_holdings,
+                        "saved_validation": saved_validation,
+                        "raw_csv_path": raw_csv_path,
+                    }
+                )
+
+        with patch.dict("sys.modules", {"src.portfolio_analysis_app.data_retrival": FakeDataRetrival}):
+            result = refresh_supported_etf_snapshot(
+                {
+                    "symbol": "VWRP",
+                    "isin": "IE00BK5BQT80",
+                    "product_page": "https://example.test/vwrp",
+                    "holdings_url": "https://example.test/vwrp.csv",
+                    "issuer": "vanguard",
+                    "weight_pct": 25.0,
+                    "error": "",
+                }
+            )
+
+        self.assertEqual(
+            calls[0],
+            {
+                "symbol": "VWRP",
+                "isin": "IE00BK5BQT80",
+                "product_page": "https://example.test/vwrp",
+                "pie_weight": 0.25,
+                "issuer_key": "vanguard",
+                "holdings_url": "https://example.test/vwrp.csv",
+            },
+        )
+        self.assertEqual(result["symbol"], "VWRP")
+        self.assertEqual(result["snapshot_date"], "20260603")

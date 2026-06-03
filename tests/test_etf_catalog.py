@@ -167,3 +167,40 @@ class EtfCatalogTests(unittest.TestCase):
         matches = search_etf_catalog("emerging markets", catalog)
 
         self.assertEqual([entry["symbol"] for entry in matches], ["EIMI"])
+
+    def test_committed_catalog_includes_supported_vanguard_vwrp_and_vags(self) -> None:
+        catalog = load_etf_catalog()
+
+        vwrp = find_exact_catalog_match("VWRP", catalog)
+        vags = find_exact_catalog_match("IE00BG47K971", catalog)
+
+        self.assertIsNotNone(vwrp)
+        self.assertIsNotNone(vags)
+        self.assertEqual(vwrp["etf_id"], "vanguard-vwrp-ie00bk5bqt80")
+        self.assertEqual(vwrp["issuer_key"], "vanguard")
+        self.assertEqual(vwrp["support_status"], "supported")
+        self.assertEqual(vags["etf_id"], "vanguard-vags-ie00bg47k971")
+        self.assertEqual(vags["issuer_key"], "vanguard")
+        self.assertEqual(vags["asset_class"], "Fixed Income")
+
+    def test_search_etf_catalog_matches_vanguard_issuer_text(self) -> None:
+        catalog = [
+            {
+                "etf_id": "vanguard-vwrp-ie00bk5bqt80",
+                "issuer_key": "vanguard",
+                "symbol": "VWRP",
+                "isin": "IE00BK5BQT80",
+                "display_name": "Vanguard FTSE All-World UCITS ETF",
+                "asset_class": "Equity",
+                "product_url": "https://example.test/vwrp",
+                "holdings_url": "https://example.test/vwrp.csv",
+                "search_text": "vwrp ie00bk5bqt80 vanguard ftse all-world ucits etf",
+                "support_status": "supported",
+                "support_reason_code": "",
+                "support_error_detail": "",
+            }
+        ]
+
+        matches = search_etf_catalog("vanguard", catalog)
+
+        self.assertEqual([entry["symbol"] for entry in matches], ["VWRP"])

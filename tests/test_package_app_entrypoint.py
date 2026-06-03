@@ -14,6 +14,7 @@ class FakeStreamlit(types.ModuleType):
         super().__init__("streamlit")
         self.page_config_calls: list[dict] = []
         self.error_calls: list[tuple] = []
+        self.markdown_calls: list[tuple] = []
         self.control_labels: list[str] = []
         self.session_state: dict = {}
 
@@ -29,6 +30,7 @@ class FakeStreamlit(types.ModuleType):
         return None
 
     def markdown(self, *args, **kwargs):
+        self.markdown_calls.append(args)
         return None
 
     def error(self, *args, **kwargs):
@@ -132,6 +134,9 @@ class PackageAppEntrypointTests(unittest.TestCase):
         fake_portfolio.list_available_snapshot_dates = lambda: []
         fake_custom_portfolios = types.ModuleType("src.portfolio_analysis_app.custom_portfolios")
         fake_custom_portfolios.DEFAULT_PORTFOLIO_NAME = "PIE Default"
+        fake_custom_portfolios.get_default_saved_portfolios = lambda data_dir=None: [
+            {"name": "PIE Default", "entries": []}
+        ]
         fake_custom_portfolios.load_saved_portfolios = lambda data_dir=None: []
         fake_custom_portfolios.save_saved_portfolios = lambda portfolios, data_dir=None: None
         fake_custom_portfolios.resolve_portfolio_entries = lambda entries: []
@@ -190,4 +195,4 @@ class PackageAppEntrypointTests(unittest.TestCase):
                     sys.modules[name] = previous_module
 
         self.assertEqual(fake_streamlit.page_config_calls[0]["page_title"], "PIE Portfolio Analysis")
-        self.assertEqual(fake_streamlit.error_calls, [("No saved portfolios are available.",)])
+        self.assertIn(("No saved portfolios are available.",), fake_streamlit.markdown_calls)
