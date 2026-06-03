@@ -139,7 +139,10 @@ def accept_cookies_best_effort(page) -> None:
             continue
 
 
-def fetch_rendered_html_and_request_ctx(url: str) -> Tuple[str, object, object, object, object]:
+def fetch_rendered_html_and_request_ctx(
+    url: str,
+    wait_for_vanguard_holdings: bool = False,
+) -> Tuple[str, object, object, object, object]:
     """
     Opens a headless Chromium page, handles consent best-effort,
     returns (html, request_context, context, browser, playwright_instance).
@@ -159,7 +162,10 @@ def fetch_rendered_html_and_request_ctx(url: str) -> Tuple[str, object, object, 
         page.goto(url, wait_until="domcontentloaded", timeout=60000)
         accept_cookies_best_effort(page)
         page.wait_for_timeout(2000)  # let JS settle
-        html = page.content()
+        if wait_for_vanguard_holdings:
+            html = wait_for_vanguard_holdings_table(page)
+        else:
+            html = page.content()
         return html, context.request, context, browser, p
     except PlaywrightTimeoutError:
         # Save what we can for debugging
@@ -188,6 +194,25 @@ def close_playwright(context, browser, p) -> None:
         p.stop()
     except Exception:
         pass
+
+
+def wait_for_vanguard_holdings_table(page, timeout_ms: int = 12000, poll_ms: int = 1000) -> str:
+    elapsed_ms = 0
+    last_html = page.content()
+    while True:
+        try:
+            parse_vanguard_holdings_table(last_html)
+            return last_html
+        except ValueError:
+            pass
+
+        if elapsed_ms >= timeout_ms:
+            return last_html
+
+        wait_ms = min(poll_ms, timeout_ms - elapsed_ms)
+        page.wait_for_timeout(wait_ms)
+        elapsed_ms += wait_ms
+        last_html = page.content()
 
 
 # -----------------------
@@ -274,7 +299,7 @@ def download_csv_via_playwright(request_ctx, csv_url: str, referer: str) -> str:
 # Vanguard resolver + downloader
 # -----------------------
 
-def extract_vanguard_holdings_url(product_page_url: str, rendered_html: str) -> str:
+def find_vanguard_holdings_url(product_page_url: str, rendered_html: str) -> Optional[str]:
     candidates: list[str] = []
     for match in re.finditer(r'(?:href|src)="(?P<url>[^"]+)"', rendered_html, re.IGNORECASE):
         raw_url = html_lib.unescape(match.group("url")).strip()
@@ -288,13 +313,7 @@ def extract_vanguard_holdings_url(product_page_url: str, rendered_html: str) -> 
             candidates.append(url)
 
     if not candidates:
-        dbg_path = os.path.join(DATA_DIR, "debug_no_vanguard_holdings_link.html")
-        with open(dbg_path, "w", encoding="utf-8") as f:
-            f.write(rendered_html)
-        raise ValueError(
-            f"No Vanguard holdings links found on page: {product_page_url}. "
-            f"Saved HTML to {dbg_path}."
-        )
+        return None
 
     def score(url: str) -> int:
         url_lower = url.lower()
@@ -311,6 +330,20 @@ def extract_vanguard_holdings_url(product_page_url: str, rendered_html: str) -> 
 
     candidates.sort(key=score, reverse=True)
     return candidates[0]
+
+
+def extract_vanguard_holdings_url(product_page_url: str, rendered_html: str) -> str:
+    holdings_url = find_vanguard_holdings_url(product_page_url, rendered_html)
+    if holdings_url:
+        return holdings_url
+
+    dbg_path = os.path.join(DATA_DIR, "debug_no_vanguard_holdings_link.html")
+    with open(dbg_path, "w", encoding="utf-8") as f:
+        f.write(rendered_html)
+    raise ValueError(
+        f"No Vanguard holdings links found on page: {product_page_url}. "
+        f"Saved HTML to {dbg_path}."
+    )
 
 
 def download_vanguard_holdings_via_playwright(request_ctx, holdings_url: str, referer: str) -> bytes:
@@ -364,6 +397,69 @@ def _parse_vanguard_holdings_excel(content: bytes | str) -> pd.DataFrame:
             except Exception as exc:
                 last_err = exc
     raise ValueError(f"Unable to parse Vanguard holdings spreadsheet. Last error: {last_err}")
+
+
+def parse_vanguard_holdings_table(rendered_html: str) -> pd.DataFrame:
+    for table_match in re.finditer(r"<table\b[^>]*>(?P<table>.*?)</table>", rendered_html, re.IGNORECASE | re.DOTALL):
+        rows = _extract_html_table_rows(table_match.group("table"))
+        if len(rows) < 2:
+            continue
+
+        for header_index, header in enumerate(rows[:5]):
+            columns = [str(value).strip() for value in header]
+            if _find_vanguard_weight_column(columns) is None:
+                continue
+            if _pick_matching_column(columns, ["Holding name", "Holding Name", "Name", "Security Name", "Issuer Name"]) is None:
+                continue
+
+            data_rows: list[list[str]] = []
+            for row in rows[header_index + 1:]:
+                if len(row) < len(columns):
+                    row = row + [""] * (len(columns) - len(row))
+                elif len(row) > len(columns):
+                    row = row[:len(columns)]
+                if any(str(cell).strip() for cell in row):
+                    data_rows.append(row)
+            if data_rows:
+                return pd.DataFrame(data_rows, columns=_dedupe_columns(columns))
+
+    raise ValueError("Unable to parse Vanguard holdings table from rendered HTML.")
+
+
+def _extract_html_table_rows(table_html: str) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for row_match in re.finditer(r"<tr\b[^>]*>(?P<row>.*?)</tr>", table_html, re.IGNORECASE | re.DOTALL):
+        row_html = row_match.group("row")
+        cells = [
+            _html_fragment_text(cell_match.group("cell"))
+            for cell_match in re.finditer(
+                r"<t[dh]\b[^>]*>(?P<cell>.*?)</t[dh]>",
+                row_html,
+                re.IGNORECASE | re.DOTALL,
+            )
+        ]
+        if cells:
+            rows.append(cells)
+    return rows
+
+
+def _html_fragment_text(fragment: str) -> str:
+    text = re.sub(r"<!--.*?-->", "", fragment, flags=re.DOTALL)
+    text = re.sub(r"<(?:script|style)\b[^>]*>.*?</(?:script|style)>", "", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html_lib.unescape(text).replace("\xa0", " ")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _dedupe_columns(columns: list[str]) -> list[str]:
+    seen: dict[str, int] = {}
+    deduped: list[str] = []
+    for index, column in enumerate(columns):
+        base = column or f"Column {index + 1}"
+        count = seen.get(base, 0)
+        seen[base] = count + 1
+        deduped.append(base if count == 0 else f"{base}.{count}")
+    return deduped
 
 
 # -----------------------
@@ -652,16 +748,21 @@ def fetch_standardised_vanguard_holdings_snapshot(
     holdings_url: str = "",
 ) -> Tuple[pd.DataFrame, HoldingsValidation, str]:
     html, request_context, context, browser, playwright_instance = fetch_rendered_html_and_request_ctx(
-        product_page
+        product_page,
+        wait_for_vanguard_holdings=True,
     )
     try:
-        resolved_holdings_url = holdings_url.strip() or extract_vanguard_holdings_url(product_page, html)
-        content = download_vanguard_holdings_via_playwright(
-            request_context,
-            resolved_holdings_url,
-            referer=product_page,
-        )
-        raw_df = parse_vanguard_holdings_content(content, resolved_holdings_url)
+        resolved_holdings_url = holdings_url.strip() or find_vanguard_holdings_url(product_page, html)
+        if resolved_holdings_url:
+            content = download_vanguard_holdings_via_playwright(
+                request_context,
+                resolved_holdings_url,
+                referer=product_page,
+            )
+            raw_df = parse_vanguard_holdings_content(content, resolved_holdings_url)
+        else:
+            raw_df = parse_vanguard_holdings_table(html)
+            resolved_holdings_url = "rendered_page"
         asset_class = "Fixed Income" if symbol.strip().upper() == "VAGS" else "Equity"
         holdings = standardise_vanguard_holdings(raw_df, symbol=symbol, asset_class=asset_class)
         validation = validate_vanguard_holdings_capture(raw_df, holdings)

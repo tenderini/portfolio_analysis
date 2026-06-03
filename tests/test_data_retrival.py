@@ -124,3 +124,109 @@ class DataRetrivalTests(unittest.TestCase):
         self.assertEqual(holdings["sector"].tolist(), ["Fixed Income", "Fixed Income"])
         self.assertEqual(holdings["asset_class"].tolist(), ["Fixed Income", "Fixed Income"])
         self.assertEqual(holdings["weight_pct"].tolist(), [1.25, 0.75])
+
+    def test_fetch_vanguard_holdings_falls_back_to_rendered_holdings_table_without_download_link(self) -> None:
+        rendered_html = """
+        <html>
+          <body>
+            <europe-core-fund-holdings>
+              <h5>Holdings details</h5>
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Holding name</th>
+                    <th>% of market value</th>
+                    <th>Sector</th>
+                    <th>Region</th>
+                    <th>Market value</th>
+                    <th>Shares</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>NVIDIA Corp</td>
+                    <td> 4.58302% </td>
+                    <td> Technology </td>
+                    <td> US </td>
+                    <td> US$3,059,156,442.23 </td>
+                    <td> 15,328,739 </td>
+                  </tr>
+                  <tr>
+                    <td>Apple Inc</td>
+                    <td> 3.83449% </td>
+                    <td> Technology </td>
+                    <td> US </td>
+                    <td> US$2,559,514,302.00 </td>
+                    <td> 9,432,520 </td>
+                  </tr>
+                </tbody>
+              </table>
+            </europe-core-fund-holdings>
+          </body>
+        </html>
+        """
+        context = Mock()
+        browser = Mock()
+        playwright_instance = Mock()
+
+        with patch.object(
+            data_retrival,
+            "fetch_rendered_html_and_request_ctx",
+            return_value=(rendered_html, Mock(), context, browser, playwright_instance),
+        ):
+            holdings, validation, source = data_retrival.fetch_standardised_vanguard_holdings_snapshot(
+                symbol="VWRP",
+                isin="IE00BK5BQT80",
+                product_page="https://example.test/vwrp",
+            )
+
+        self.assertEqual(source, "rendered_page")
+        self.assertEqual(holdings["company"].tolist(), ["NVIDIA Corp", "Apple Inc"])
+        self.assertEqual(holdings["weight_pct"].tolist(), [4.58302, 3.83449])
+        self.assertEqual(holdings["sector"].tolist(), ["Technology", "Technology"])
+        self.assertEqual(holdings["country"].tolist(), ["US", "US"])
+        self.assertEqual(validation.resolved_weight_column, "% of market value")
+
+    def test_wait_for_vanguard_holdings_table_polls_until_fixed_income_table_is_ready(self) -> None:
+        pending_html = """
+        <html>
+          <body>
+            <europe-core-fund-holdings><!----></europe-core-fund-holdings>
+          </body>
+        </html>
+        """
+        ready_html = """
+        <html>
+          <body>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Holding name</th>
+                  <th>% of market value</th>
+                  <th>Market value</th>
+                  <th>Face amount</th>
+                  <th>Coupon/Yield</th>
+                  <th>Maturity date</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>US TREASURY N/B 4.125 11/15/2032</td>
+                  <td>1.25%</td>
+                  <td>US$1,250,000</td>
+                  <td>1,250,000</td>
+                  <td>4.125%</td>
+                  <td>15 Nov 2032</td>
+                </tr>
+              </tbody>
+            </table>
+          </body>
+        </html>
+        """
+        page = Mock()
+        page.content.side_effect = [pending_html, ready_html]
+
+        html = data_retrival.wait_for_vanguard_holdings_table(page, timeout_ms=500, poll_ms=100)
+
+        self.assertEqual(html, ready_html)
+        page.wait_for_timeout.assert_called_once_with(100)
