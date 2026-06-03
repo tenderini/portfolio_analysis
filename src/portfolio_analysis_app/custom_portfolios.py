@@ -30,9 +30,9 @@ def get_default_saved_portfolios() -> list[dict[str, Any]]:
                     "search_text": "SWDA",
                 },
                 {
-                    "etf_id": "ishares-emim-ie00bkm4gz66",
+                    "etf_id": "ishares-eimi-ie00bkm4gz66",
                     "weight_pct": 12.0,
-                    "search_text": "EMIM",
+                    "search_text": "EIMI",
                 },
                 {
                     "etf_id": "ishares-wsml-ie00bf4rfh31",

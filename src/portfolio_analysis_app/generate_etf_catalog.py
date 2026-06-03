@@ -263,8 +263,65 @@ def _candidate_resume_key(candidate: dict[str, Any]) -> str:
     return _normalise_product_url(str(candidate.get("product_url", "")).strip())
 
 
-def _checkpoint_rows_by_key(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    return {_candidate_resume_key(row): row for row in rows}
+def _candidate_identity_keys(candidate: dict[str, Any]) -> set[str]:
+    keys: set[str] = set()
+
+    etf_id = str(candidate.get("etf_id", "")).strip().casefold()
+    if etf_id:
+        keys.add(f"etf_id:{etf_id}")
+
+    isin = str(candidate.get("isin", "")).strip().upper()
+    if isin:
+        keys.add(f"isin:{isin}")
+
+    symbol = str(candidate.get("symbol", "")).strip().upper()
+    display_name = re.sub(r"\s+", " ", str(candidate.get("display_name", "")).strip().casefold())
+    if symbol and display_name:
+        keys.add(f"symbol_display:{symbol}|{display_name}")
+
+    product_url = _candidate_resume_key(candidate)
+    if product_url:
+        keys.add(f"product_url:{product_url}")
+
+    return keys
+
+
+def _find_matching_row_index(rows: list[dict[str, Any]], candidate: dict[str, Any]) -> int | None:
+    candidate_keys = _candidate_identity_keys(candidate)
+    if not candidate_keys:
+        return None
+
+    for index, row in enumerate(rows):
+        if candidate_keys.intersection(_candidate_identity_keys(row)):
+            return index
+    return None
+
+
+def _catalog_row_quality(row: dict[str, Any]) -> tuple[bool, bool, bool, bool]:
+    product_url = _candidate_resume_key(row)
+    return (
+        str(row.get("support_status", "")).strip() == "supported",
+        bool(str(row.get("holdings_url", "")).strip()),
+        "ishares.com" in product_url,
+        bool(str(row.get("isin", "")).strip()),
+    )
+
+
+def _prefer_catalog_row(existing_row: dict[str, Any], candidate_row: dict[str, Any]) -> dict[str, Any]:
+    if _catalog_row_quality(candidate_row) >= _catalog_row_quality(existing_row):
+        return candidate_row
+    return existing_row
+
+
+def _merge_catalog_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged_rows: list[dict[str, Any]] = []
+    for row in rows:
+        existing_index = _find_matching_row_index(merged_rows, row)
+        if existing_index is None:
+            merged_rows.append(row)
+            continue
+        merged_rows[existing_index] = _prefer_catalog_row(merged_rows[existing_index], row)
+    return merged_rows
 
 
 def _candidate_progress_label(candidate: dict[str, Any]) -> tuple[str, str]:
@@ -325,13 +382,15 @@ def _process_catalog_candidates(
     candidates: list[dict[str, str]],
     checkpoint_path: Path = CATALOG_CHECKPOINT_PATH,
 ) -> list[dict[str, str]]:
-    completed_rows = _load_catalog_checkpoint(checkpoint_path)
-    completed_by_key = _checkpoint_rows_by_key(completed_rows)
+    completed_rows = _merge_catalog_rows(_load_catalog_checkpoint(checkpoint_path))
+    completed_resume_keys = {
+        resume_key for row in completed_rows if (resume_key := _candidate_resume_key(row))
+    }
     total_candidates = len(candidates)
     remaining_candidates = [
         candidate
         for candidate in candidates
-        if _candidate_resume_key(candidate) not in completed_by_key
+        if _candidate_resume_key(candidate) not in completed_resume_keys
     ]
     total_remaining = len(remaining_candidates)
 
@@ -345,7 +404,7 @@ def _process_catalog_candidates(
     remaining_index = 0
     for candidate in candidates:
         resume_key = _candidate_resume_key(candidate)
-        if resume_key in completed_by_key:
+        if resume_key in completed_resume_keys:
             continue
 
         remaining_index += 1
@@ -361,8 +420,15 @@ def _process_catalog_candidates(
             display_name,
         )
         completed_row = _process_catalog_candidate(candidate)
-        completed_rows.append(completed_row)
-        completed_by_key[resume_key] = completed_row
+        existing_index = _find_matching_row_index(completed_rows, completed_row)
+        if existing_index is None:
+            completed_rows.append(completed_row)
+        else:
+            completed_rows[existing_index] = _prefer_catalog_row(completed_rows[existing_index], completed_row)
+        completed_resume_keys.add(resume_key)
+        processed_resume_key = _candidate_resume_key(completed_row)
+        if processed_resume_key:
+            completed_resume_keys.add(processed_resume_key)
         completed_symbol, _ = _candidate_progress_label(completed_row)
         if completed_row.get("support_status") == "supported":
             completion_status = "supported"

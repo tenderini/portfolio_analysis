@@ -20,8 +20,8 @@ ETF_DESCRIPTION_MAP = {
         ),
         "role": "Core developed-world large and mid cap exposure.",
     },
-    "EMIM": {
-        "ticker": "EMIM",
+    "EIMI": {
+        "ticker": "EIMI",
         "description": (
             "Emerging markets ETF covering large-, mid-, and small-cap companies across countries "
             "such as China, India, Taiwan, Brazil, and South Africa."

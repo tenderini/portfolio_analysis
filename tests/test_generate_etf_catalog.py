@@ -364,11 +364,11 @@ class GenerateEtfCatalogTests(unittest.TestCase):
                 "holdings_url": "",
             },
             {
-                "symbol": "EMIM",
+                "symbol": "EIMI",
                 "isin": "",
                 "display_name": "iShares Core MSCI Emerging Markets IMI UCITS ETF",
                 "asset_class": "Unknown",
-                "product_url": "https://example.test/emim",
+                "product_url": "https://example.test/eimi",
                 "holdings_url": "",
             },
         ]
@@ -384,7 +384,7 @@ class GenerateEtfCatalogTests(unittest.TestCase):
         log_output = "\n".join(captured.output)
         self.assertIn("Queued 2 ETF candidates for processing", log_output)
         self.assertIn("Queue: 1/2 SWDA - iShares Core MSCI World UCITS ETF", log_output)
-        self.assertIn("Queue: 2/2 EMIM - iShares Core MSCI Emerging Markets IMI UCITS ETF", log_output)
+        self.assertIn("Queue: 2/2 EIMI - iShares Core MSCI Emerging Markets IMI UCITS ETF", log_output)
 
     def test_process_catalog_candidates_skips_rows_already_in_checkpoint(self) -> None:
         checkpoint_rows = [
@@ -514,6 +514,59 @@ class GenerateEtfCatalogTests(unittest.TestCase):
             log_output,
         )
         self.assertIn("Checkpoint saved with 2 completed ETFs", log_output)
+
+    def test_process_catalog_candidates_replaces_checkpoint_row_when_same_etf_reappears_with_new_url(self) -> None:
+        checkpoint_rows = [
+            normalise_catalog_candidate(
+                {
+                    "symbol": "EIMI",
+                    "isin": "IE00BKM4GZ66",
+                    "display_name": "iShares Core MSCI EM IMI UCITS ETF",
+                    "asset_class": "Equity",
+                    "product_url": "https://example.test/eimi",
+                    "holdings_url": "",
+                    "support_status": "unsupported",
+                    "support_reason_code": "fetch_failed",
+                    "support_error_detail": "timeout",
+                }
+            )
+        ]
+        raw_candidates = [
+            {
+                "symbol": "EIMI",
+                "isin": "",
+                "display_name": "iShares Core MSCI EM IMI UCITS ETF",
+                "asset_class": "Unknown",
+                "product_url": "https://www.ishares.com/uk/individual/en/products/264659/ishares-msci-emerging-markets-imi-ucits-etf?siteEntryPassthrough=true",
+                "holdings_url": "",
+            }
+        ]
+        processed_row = normalise_catalog_candidate(
+            {
+                "symbol": "EIMI",
+                "isin": "IE00BKM4GZ66",
+                "display_name": "iShares Core MSCI EM IMI UCITS ETF",
+                "asset_class": "Equity",
+                "product_url": "https://www.ishares.com/uk/individual/en/products/264659/ishares-msci-emerging-markets-imi-ucits-etf?siteEntryPassthrough=true",
+                "holdings_url": "https://www.ishares.com/uk/individual/en/products/264659/ishares-msci-emerging-markets-imi-ucits-etf/1506575576011.ajax?fileType=csv&fileName=EIMI_holdings&dataType=fund",
+                "support_status": "supported",
+                "support_reason_code": "",
+                "support_error_detail": "",
+            }
+        )
+
+        with (
+            patch.object(generate_etf_catalog, "_load_catalog_checkpoint", return_value=checkpoint_rows),
+            patch.object(generate_etf_catalog, "_process_catalog_candidate", return_value=processed_row) as process_mock,
+        ):
+            candidates = generate_etf_catalog._process_catalog_candidates(raw_candidates)
+
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["etf_id"], "ishares-eimi-ie00bkm4gz66")
+        self.assertEqual(candidates[0]["product_url"], processed_row["product_url"])
+        self.assertEqual(candidates[0]["holdings_url"], processed_row["holdings_url"])
+        self.assertEqual(candidates[0]["support_status"], "supported")
+        self.assertEqual(process_mock.call_count, 1)
 
     def test_process_catalog_candidate_returns_unsupported_row_when_enrichment_retries_fail(self) -> None:
         candidate = {

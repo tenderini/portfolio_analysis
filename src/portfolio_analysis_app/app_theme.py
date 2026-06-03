@@ -5,7 +5,7 @@ from typing import Iterable
 
 DARK_ETF_COLOR_MAP = {
     "SWDA": "#4ecdc4",
-    "EMIM": "#7dd3fc",
+    "EIMI": "#7dd3fc",
     "WSML": "#f4b860",
 }
 

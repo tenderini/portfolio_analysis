@@ -38,13 +38,13 @@ class SavedPortfolioTests(unittest.TestCase):
         return [
             self._catalog_entry(),
             self._catalog_entry(
-                etf_id="ishares-emim-ie00bkm4gz66",
-                symbol="EMIM",
+                etf_id="ishares-eimi-ie00bkm4gz66",
+                symbol="EIMI",
                 isin="IE00BKM4GZ66",
                 display_name="iShares Core MSCI Emerging Markets IMI UCITS ETF",
-                product_url="https://example.test/emim",
-                holdings_url="https://example.test/emim.csv",
-                search_text="emim ie00bkm4gz66 ishares core msci emerging markets imi ucits etf",
+                product_url="https://example.test/eimi",
+                holdings_url="https://example.test/eimi.csv",
+                search_text="eimi ie00bkm4gz66 ishares core msci emerging markets imi ucits etf",
             ),
             self._catalog_entry(
                 etf_id="ishares-wsml-ie00bf4rfh31",
@@ -66,7 +66,7 @@ class SavedPortfolioTests(unittest.TestCase):
             [entry["etf_id"] for entry in portfolios[0]["entries"]],
             [
                 "ishares-swda-ie00b4l5y983",
-                "ishares-emim-ie00bkm4gz66",
+                "ishares-eimi-ie00bkm4gz66",
                 "ishares-wsml-ie00bf4rfh31",
             ],
         )
@@ -97,7 +97,7 @@ class SavedPortfolioTests(unittest.TestCase):
 
         self.assertEqual(
             [entry["etf_id"] for entry in portfolios[0]["entries"]],
-            ["ishares-swda-ie00b4l5y983", "ishares-emim-ie00bkm4gz66"],
+            ["ishares-swda-ie00b4l5y983", "ishares-eimi-ie00bkm4gz66"],
         )
 
     def test_save_saved_portfolios_persists_named_portfolios(self) -> None:
@@ -111,9 +111,9 @@ class SavedPortfolioTests(unittest.TestCase):
                         "search_text": "SWDA",
                     },
                     {
-                        "etf_id": "ishares-emim-ie00bkm4gz66",
+                        "etf_id": "ishares-eimi-ie00bkm4gz66",
                         "weight_pct": 20.0,
-                        "search_text": "EMIM",
+                        "search_text": "EIMI",
                     },
                 ],
             }
@@ -146,11 +146,11 @@ class SavedPortfolioTests(unittest.TestCase):
             resolved = resolve_portfolio_entries(
                 [
                     {"etf_id": "ishares-swda-ie00b4l5y983", "weight_pct": 78.0},
-                    {"etf_id": "ishares-emim-ie00bkm4gz66", "weight_pct": 12.0},
+                    {"etf_id": "ishares-eimi-ie00bkm4gz66", "weight_pct": 12.0},
                 ]
             )
 
-        self.assertEqual([entry["symbol"] for entry in resolved], ["SWDA", "EMIM"])
+        self.assertEqual([entry["symbol"] for entry in resolved], ["SWDA", "EIMI"])
         self.assertEqual([entry["isin"] for entry in resolved], ["IE00B4L5Y983", "IE00BKM4GZ66"])
 
     def test_resolve_portfolio_entries_marks_unsupported_catalog_rows(self) -> None:
@@ -194,12 +194,12 @@ class SavedPortfolioTests(unittest.TestCase):
             entries = resolve_portfolio_entries(
                 [
                     {"etf_id": "ishares-swda-ie00b4l5y983", "weight_pct": 78.0},
-                    {"etf_id": "ishares-emim-ie00bkm4gz66", "weight_pct": 12.0},
+                    {"etf_id": "ishares-eimi-ie00bkm4gz66", "weight_pct": 12.0},
                     {"etf_id": "ishares-wsml-ie00bf4rfh31", "weight_pct": 10.0},
                 ]
             )
             result = build_combined_holdings_for_portfolio(entries, data_dir=Path("data"))
 
         self.assertEqual(result["snapshot_label"], "Apr 8, 2026")
-        self.assertEqual(set(result["combined_holdings"]["parent_etf"]), {"SWDA", "EMIM", "WSML"})
+        self.assertEqual(set(result["combined_holdings"]["parent_etf"]), {"SWDA", "EIMI", "WSML"})
         self.assertAlmostEqual(result["combined_holdings"]["contribution_pct"].sum(), 99.92, places=2)

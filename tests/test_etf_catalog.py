@@ -149,15 +149,15 @@ class EtfCatalogTests(unittest.TestCase):
                 "support_error_detail": "",
             },
             {
-                "etf_id": "ishares-emim-ie00bkm4gz66",
+                "etf_id": "ishares-eimi-ie00bkm4gz66",
                 "issuer_key": "ishares",
-                "symbol": "EMIM",
+                "symbol": "EIMI",
                 "isin": "IE00BKM4GZ66",
                 "display_name": "iShares Core MSCI Emerging Markets IMI UCITS ETF",
                 "asset_class": "Equity",
-                "product_url": "https://example.test/emim",
-                "holdings_url": "https://example.test/emim.csv",
-                "search_text": "emim ie00bkm4gz66 ishares core msci emerging markets imi ucits etf",
+                "product_url": "https://example.test/eimi",
+                "holdings_url": "https://example.test/eimi.csv",
+                "search_text": "eimi ie00bkm4gz66 ishares core msci emerging markets imi ucits etf",
                 "support_status": "supported",
                 "support_reason_code": "",
                 "support_error_detail": "",
@@ -166,4 +166,4 @@ class EtfCatalogTests(unittest.TestCase):
 
         matches = search_etf_catalog("emerging markets", catalog)
 
-        self.assertEqual([entry["symbol"] for entry in matches], ["EMIM"])
+        self.assertEqual([entry["symbol"] for entry in matches], ["EIMI"])

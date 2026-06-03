@@ -67,7 +67,7 @@ class DarkThemeTests(unittest.TestCase):
         self.assertEqual(figure.updated_layout["margin"]["t"], 56)
 
     def test_dark_etf_color_map_keeps_all_expected_symbols(self) -> None:
-        self.assertEqual(set(DARK_ETF_COLOR_MAP), {"SWDA", "EMIM", "WSML"})
+        self.assertEqual(set(DARK_ETF_COLOR_MAP), {"SWDA", "EIMI", "WSML"})
 
     def test_apply_dark_figure_layout_omits_title_when_not_provided(self) -> None:
         figure = FakeFigure()
