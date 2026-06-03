@@ -200,6 +200,6 @@ class SavedPortfolioTests(unittest.TestCase):
             )
             result = build_combined_holdings_for_portfolio(entries, data_dir=Path("data"))
 
-        self.assertEqual(result["snapshot_label"], "Apr 8, 2026")
+        self.assertEqual(result["snapshot_label"], "Mixed cached snapshots")
         self.assertEqual(set(result["combined_holdings"]["parent_etf"]), {"SWDA", "EIMI", "WSML"})
-        self.assertAlmostEqual(result["combined_holdings"]["contribution_pct"].sum(), 99.92, places=2)
+        self.assertAlmostEqual(result["combined_holdings"]["contribution_pct"].sum(), 99.91, places=2)

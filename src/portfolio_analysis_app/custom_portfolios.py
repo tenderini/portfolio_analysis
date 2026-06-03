@@ -17,6 +17,9 @@ SAVED_PORTFOLIOS_FILENAME = "user_portfolios.json"
 DEFAULT_PORTFOLIO_NAME = "PIE Default"
 WEIGHT_TOTAL_TOLERANCE = 1e-6
 SNAPSHOT_PATTERN = re.compile(r"^(?P<symbol>[A-Z0-9._-]+)_(?P<date>\d{8})_holdings\.parquet$")
+SNAPSHOT_SYMBOL_ALIASES = {
+    "EIMI": ("EIMI", "EMIM"),
+}
 
 
 def get_default_saved_portfolios() -> list[dict[str, Any]]:
@@ -190,12 +193,12 @@ def build_combined_holdings_for_portfolio(
 
     for entry in resolved_entries:
         symbol = str(entry["symbol"])
-        snapshot_date = _get_latest_holdings_snapshot_date(symbol, data_path)
-        if snapshot_date is None:
+        snapshot = _get_latest_holdings_snapshot(symbol, data_path)
+        if snapshot is None:
             raise FileNotFoundError(f"No cached holdings snapshot found for {symbol}")
+        snapshot_date, holdings_path = snapshot
 
         snapshot_dates.add(snapshot_date)
-        holdings_path = data_path / f"{symbol}_{snapshot_date}_holdings.parquet"
         holdings = pd.read_parquet(holdings_path).copy()
         holdings["weight_pct"] = pd.to_numeric(holdings["weight_pct"], errors="coerce").fillna(0.0)
 
@@ -310,13 +313,14 @@ def _migrate_saved_entry(entry: dict[str, Any], catalog: list[dict[str, Any]]) -
     }
 
 
-def _get_latest_holdings_snapshot_date(symbol: str, data_dir: Path) -> str | None:
-    dates: list[str] = []
-    for file_path in data_dir.glob(f"{symbol}_*_holdings.parquet"):
-        match = SNAPSHOT_PATTERN.match(file_path.name)
-        if match and match.group("symbol") == symbol:
-            dates.append(match.group("date"))
+def _get_latest_holdings_snapshot(symbol: str, data_dir: Path) -> tuple[str, Path] | None:
+    snapshots: list[tuple[str, Path]] = []
+    for snapshot_symbol in SNAPSHOT_SYMBOL_ALIASES.get(symbol, (symbol,)):
+        for file_path in data_dir.glob(f"{snapshot_symbol}_*_holdings.parquet"):
+            match = SNAPSHOT_PATTERN.match(file_path.name)
+            if match and match.group("symbol") == snapshot_symbol:
+                snapshots.append((match.group("date"), file_path))
 
-    if not dates:
+    if not snapshots:
         return None
-    return sorted(dates, reverse=True)[0]
+    return sorted(snapshots, key=lambda item: item[0], reverse=True)[0]

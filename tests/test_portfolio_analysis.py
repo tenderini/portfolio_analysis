@@ -293,7 +293,7 @@ class CustomPortfolioReportTests(unittest.TestCase):
             etf_descriptions=portfolio_inputs["etf_descriptions"],
         )
 
-        self.assertEqual(report["snapshot_date"], "Apr 8, 2026")
+        self.assertEqual(report["snapshot_date"], "Mixed cached snapshots")
         self.assertEqual(report["etf_composition"]["parent_etf"].tolist(), ["SWDA", "EIMI", "WSML"])
         self.assertEqual([item["ticker"] for item in report["etf_descriptions"]], ["SWDA", "EIMI", "WSML"])
-        self.assertAlmostEqual(report["summary"]["portfolio_total_pct"], 99.92, places=2)
+        self.assertAlmostEqual(report["summary"]["portfolio_total_pct"], 99.91, places=2)
